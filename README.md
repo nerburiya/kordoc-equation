@@ -1,3 +1,61 @@
+# kordoc-equation
+
+> **이 저장소는 [chrisryugj/kordoc](https://github.com/chrisryugj/kordoc)의 개인 수정본입니다.**
+> 원 프로젝트의 4.25.5(커밋 `35573ec1`) 위에, Markdown 수식을 HWPX로 만들 때 한컴 한글과 어긋나던 문제를 고친 커밋 하나를 얹었습니다.
+> kordoc 본체의 저작권과 라이선스(MIT)는 원 저작자 chrisryugj에게 있으며 `LICENSE`·`NOTICE`를 그대로 두었습니다.
+> 원 프로젝트가 공식으로 배포하거나 검토한 판이 아닙니다.
+
+## 이 수정본에서 바꾼 것
+
+Markdown의 LaTeX 수식(`$…$`, `--inline-math`)을 HWPX로 만들면 한글에서 다음 문제가 있었습니다.
+
+| 증상 | 원인 | 수정 |
+| --- | --- | --- |
+| 수식 앞뒤 여백 때문에 줄 높이가 커지고 글 전체가 흐트러짐 | 분수가 여러 개 이어진 식에서 `over`가 앞의 항목 **전부**를 분자로 묶어 수식 상자 높이를 최대 3배로 잡음 | 분자를 바로 앞 항목 하나로 (`src/hwpx/equation-metrics.ts`) |
+| 자간이 깨지고 수식만 커 보임 | 본문 글자 크기와 상관없이 수식 글자 크기를 12pt로 고정. 글자 폭은 평균 11% 작게 잡음 | 수식이 놓인 글자 크기로 맞춤. 글자·기호 폭을 한글 실측값으로 바꾸고, 크기별 반올림 규칙 반영 (`equation-metrics.ts`, `equation-generate.ts`, `generator.ts`) |
+| 한글 수식 편집기 구문 보기에서 `"dots"`, `"varphi"` 같은 글자가 보이거나 중괄호가 사라짐 | 변환 표에 없는 LaTeX 명령을 글자로 넣음. `\{ \}`를 보이지 않는 묶음 괄호로 넣음 | `\dots` `\varphi` `\vartheta` `\varepsilon` `\iff` `\implies` `\big`류 `\quad` `\qquad` `\{ \}` `\dfrac` `\tfrac` `\binom` `\mathbf` `\mathbb` `\operatorname` `\displaystyle` `\lt` `\gt` `\prime` `\parallel` 등을 한글 수식 명령으로 변환 (`equation-generate.ts`). 다시 읽는 쪽에도 `varphi` 계열·`bold` 추가 (`equation.ts`) |
+
+### 측정 방법과 결과
+
+수정 근거는 추정이 아니라 한글에서 직접 잰 값입니다.
+
+- Windows용 한컴오피스 한글 자동화로 kordoc이 만든 HWPX를 열고, 수식마다 한글 수식 편집기 다시 계산(`EquationModify`, `HEqEdit`)을 실행했습니다. 그 뒤 한글이 정한 상자 폭·높이·기준선을 kordoc 추정값과 비교했습니다.
+- 글자 하나, 기호 하나, 구조(분수·첨자·근호·큰 연산자)별 수식 약 200종을 9·10·11·12·15pt에서 재서 상수를 정했습니다.
+- 확인된 한글 규칙: 높이는 수식 크기를 0.75pt 단위로 반올림한 크기로 계산하고, 글자 폭은 1.5pt 단위로 반올림한 크기에서 글자마다 0.75pt 단위로 반올림합니다. 그래서 10pt와 11pt 수식의 글자 폭이 같습니다.
+
+예시 문서(수학 문항 해설, 인라인 수식 463개, 본문 10pt)에서 잰 결과입니다.
+
+| | 수정 전 | 수정 후 |
+| --- | --- | --- |
+| 수식 글자 크기 | 12pt (본문과 다름) | 10pt (본문과 같음) |
+| 높이 오차 최대 | 212% | 7% |
+| 폭 오차 중앙값 / 상위 10% | 11% / 24% | 1.4% / 4.7% |
+| 깨진 LaTeX 명령 | 6종 | 0 |
+| 쪽 수 (한글이 다시 계산하기 전 → 후) | 13 → 12쪽 | 11 → 11쪽 |
+
+- 시험: `tests/hwpx-equation-generation.test.ts`에 회귀 시험 4개를 더했습니다. 바뀐 동작에 맞춰 기존 시험 하나(`\operatorname`)의 기대값을 고쳤습니다.
+- 전체 시험 5,229개 중 실패 40건은 수정 전 코드에서도 똑같이 실패합니다. 선택 의존성(이미지 변환·OCR·QR)을 빼고 설치했거나, Windows에서 심볼릭 링크를 다루는 부분입니다. 이 수정으로 새로 생긴 실패는 없습니다.
+- 측정용 한글 자동화 스크립트는 이 저장소에 넣지 않았습니다. 측정은 Windows 11 + 한컴오피스 한글에서 했습니다.
+
+### 아직 고치지 않은 것
+
+- kordoc 자체 렌더러의 PDF 출력(`render --format pdf`)은 여전히 수식을 한 줄 글자(`a/b`)로 그립니다(`src/render/equation-text.ts`). 수식이 제대로 보이는 PDF가 필요하면 HWPX를 한글에서 PDF로 내보내세요(`bench/hangul-com-pdf.ps1`).
+- 글자 폭 상수는 HYhwpEQ 글꼴의 기본 수식 글꼴 기준입니다. 다른 수식 글꼴은 재지 않았습니다.
+
+## 참고한 프로젝트
+
+- **[chrisryugj/kordoc](https://github.com/chrisryugj/kordoc)** (MIT): 이 저장소의 원본입니다. 수정한 파일 외의 모든 코드·문서·시험은 원 프로젝트의 것입니다.
+- **[martiniifun/pyhwpx](https://github.com/martiniifun/pyhwpx)**: 한글 자동화 Python 라이브러리입니다. 이 라이브러리의 `EquationRefresh`(`HEqEdit` 설정값으로 `EquationModify`를 실행해 수식을 다시 계산)에서 "한글에 수식을 다시 계산시켜 실제 크기를 얻는다"는 방법을 참고했습니다. pyhwpx의 코드는 이 저장소에 들어 있지 않고, kordoc의 의존성으로 넣지도 않았습니다.
+- **[OpenBapul/hml-equation-parser](https://github.com/OpenBapul/hml-equation-parser)** (Apache 2.0): 한글 수식 → LaTeX 변환의 바탕입니다. 이 수정본이 새로 가져온 것은 아니고, 원 kordoc에 이미 포함되어 `THIRD_PARTY/`에 고지되어 있습니다.
+
+## 작성 방식
+
+이 수정은 사용자의 요청과 검토 아래 AI 코딩 도우미(Anthropic Claude, Claude Code)가 분석·구현·측정을 함께 했습니다. 커밋에 공동 작성자로 표시되어 있습니다.
+
+---
+
+아래는 원 프로젝트 kordoc의 README입니다. 설치 방법(`npm install kordoc`)·배지·버전 표기는 원 프로젝트 기준이라, npm으로 설치하면 이 수정이 들어 있지 않습니다. 이 수정본을 쓰려면 저장소를 받아 `npm install && npm run build`로 만들어 쓰세요.
+
 # kordoc
 
 **모두 파싱해버리겠다.**
