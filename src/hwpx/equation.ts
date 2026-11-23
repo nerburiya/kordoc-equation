@@ -97,6 +97,7 @@ export const CONVERT_MAP: Record<string, string> = {
   nu: "\\nu", xi: "\\xi", omicron: "\\omicron", pi: "\\pi",
   rho: "\\rho", sigma: "\\sigma", tau: "\\tau", upsilon: "\\upsilon",
   phi: "\\phi", chi: "\\chi", psi: "\\psi", omega: "\\omega",
+  varphi: "\\varphi", vartheta: "\\vartheta", varepsilon: "\\varepsilon",
   ALPHA: "A", BETA: "B", GAMMA: "\\Gamma", DELTA: "\\Delta",
   EPSILON: "E", ZETA: "Z", ETA: "H", THETA: "\\Theta",
   IOTA: "I", KAPPA: "K", LAMBDA: "\\Lambda", MU: "M",
@@ -439,7 +440,7 @@ function replaceAllBrace(eqString: string): string {
 /** 함수 이름 — CONVERT_MAP 에 없지만 한컴이 명령으로 읽어 붙여 써도 떼어 그린다("costheta" → cos θ) */
 const FUNCTION_WORDS = ["sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "exp"]
 /** 글꼴 지시(로만체·이탤릭) — 글자가 아니라 서식이라 LaTeX 에선 뺀다(hwp5 경로도 같다) */
-const FONT_WORDS = new Set(["rm", "it"])
+const FONT_WORDS = new Set(["rm", "it", "bold"])
 const GLUE_WORDS = new Set(
   [...Object.keys(CONVERT_MAP), ...Object.keys(MIDDLE_CONVERT_MAP), "over", "root", "of", ...FUNCTION_WORDS, ...FONT_WORDS]
     .filter(w => /^[A-Za-z]{2,}$/.test(w)),

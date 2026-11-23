@@ -16,6 +16,7 @@
  *   gen-profile.ts    — 서식 프로필(#41) id 리맵·표 매칭
  */
 
+import { fitEquationsToRunSize } from "./equation-generate.js"
 import JSZip from "jszip"
 import { type GongmunOptions, needsGaejosikAssets, resolveGongmun, usesReportFonts } from "./gongmun.js"
 import { gaejosikBodyWidth, gaejosikSizes } from "./gaejosik.js"
@@ -155,7 +156,7 @@ export async function markdownToHwpx(
       zip.file("Contents/content.hpf", generateManifest(chartParts, images.manifestItems(), "gongmun"))
       for (const part of images.parts) zip.file(part.name, part.data)
       zip.file("Contents/header.xml", headerXml)
-      zip.file("Contents/section0.xml", sectionXml)
+      zip.file("Contents/section0.xml", fitEquationsToRunSize(sectionXml, headerXml))
       for (const part of chartParts) zip.file(part.name, part.xml)
       zip.file("Preview/PrvText.txt", buildPrvText(blocks))
       return zip.generateAsync({ type: "arraybuffer" })
@@ -241,10 +242,11 @@ export async function markdownToHwpx(
   zip.file("META-INF/container.xml", generateContainerXml())
   zip.file("Contents/content.hpf", generateManifest(chartParts, images.manifestItems(), gongmun ? "gongmun" : "default"))
   for (const part of images.parts) zip.file(part.name, part.data)
-  zip.file("Contents/header.xml", generateHeaderXml(theme, gongmun, fit?.variants ?? [], extraBorderFills,
+  const headerXml = generateHeaderXml(theme, gongmun, fit?.variants ?? [], extraBorderFills,
     [...(remap?.charPrXmls ?? []), ...dfXmls, ...lvXmls, ...sumXmls, ...gjExtraXmls],
-    gongmunList?.indentVariants ?? [], [...(remap?.fontFaces ?? []), ...lvFonts, ...sumFonts]))
-  zip.file("Contents/section0.xml", sectionXml)
+    gongmunList?.indentVariants ?? [], [...(remap?.fontFaces ?? []), ...lvFonts, ...sumFonts])
+  zip.file("Contents/header.xml", headerXml)
+  zip.file("Contents/section0.xml", fitEquationsToRunSize(sectionXml, headerXml))
   for (const part of chartParts) zip.file(part.name, part.xml)
   // Preview/ — 한글 프로그램의 일부 버전(특히 macOS)이 존재 여부를 확인함
   zip.file("Preview/PrvText.txt", buildPrvText(blocks))

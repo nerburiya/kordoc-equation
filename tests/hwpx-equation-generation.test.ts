@@ -340,7 +340,9 @@ describe("미지원 LaTeX 누출 봉합 (v4.0.6 회귀) — 맨 알파벳 누출
   })
 
   it("미지원 명령은 맨 알파벳 대신 리터럴 따옴표로 보호 (\\text 되읽기)", () => {
-    assert.equal(latexLikeToEqEdit("\\operatorname{rank} A").trim(), '"operatorname" {rank} A')
+    assert.equal(latexLikeToEqEdit("\\mathfrak{g} A").trim(), '"mathfrak" {g} A')
+    // \operatorname 은 이름만 로만체 글자로 (종전엔 "operatorname" 글자가 찍혔다)
+    assert.equal(latexLikeToEqEdit("\\operatorname{rank} A").trim(), '"rank" A')
     // EqEdit 함수 키워드는 따옴표 없이 identity 통과 (로만체 함수 렌더 유지)
     assert.equal(latexLikeToEqEdit("\\sin x").trim(), "sin x")
   })
@@ -489,5 +491,66 @@ describe("인라인 수식 opt-in (#150 — inlineMath)", () => {
       else process.env.KORDOC_ROOT = previousRoot
       await rm(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe("한글 수식 편집기 호환 — 구문 깨짐·상자 크기·글자 크기", () => {
+  it("자주 쓰는 LaTeX 명령이 글자(\"dots\")가 아니라 한글 수식 기호로 나간다", () => {
+    const eq = (s: string) => latexLikeToEqEdit(s).replace(/\s+/g, " ").trim()
+    assert.equal(eq("k\\in\\{1,2,\\dots,N\\}"), "k IN LEFT { 1,2, LDOTS ,N RIGHT }")
+    assert.equal(eq("\\frac1{\\varphi^2}"), "{1} over {varphi ^{2}}")
+    assert.equal(eq("a\\iff b"), "a LRARROW b")
+    assert.equal(eq("\\max\\big(a,b\\big)"), "max (a,b )")
+    assert.equal(eq("a\\qquad b"), "a ~~~~ b")
+    assert.equal(eq("\\dfrac{a}{b}"), "{a} over {b}")
+    assert.equal(eq("\\binom{n}{k}"), "LEFT ( {matrix{n # k}} RIGHT )")
+    assert.equal(eq("\\mathbf{v}+\\mathbb{R}"), "bold{v} + ℝ")
+    assert.equal(eq("\\displaystyle a \\lt b"), "a < b")
+    // 짝 없는 \{ 는 안 보이는 "." 으로 닫아 LEFT/RIGHT 짝을 맞춘다
+    assert.equal(eq("\\{x"), "LEFT { x RIGHT .")
+    for (const s of ["\\dots", "\\varphi", "\\iff", "\\big(", "\\qquad", "\\dfrac{a}{b}", "\\binom{n}{k}", "\\mathbf{v}", "\\displaystyle a"]) {
+      assert.ok(!/"[A-Za-z]+"/.test(latexLikeToEqEdit(s)), `${s} → 글자 누출`)
+    }
+  })
+
+  it("되읽기 — 새 토큰이 같은 LaTeX 로 돌아온다", () => {
+    const rt = (s: string) => hmlToLatex(latexLikeToEqEdit(s)).replace(/\s+/g, "")
+    assert.equal(rt("\\varphi"), "\\varphi")
+    assert.equal(rt("\\{1,\\dots,N\\}"), "\\left\\{1,\\ldots,N\\right\\}")
+    assert.equal(rt("\\mathbf{v}"), "{v}")
+  })
+
+  it("상자 크기 — 한글 재계산 실측(baseUnit 1200, HWPUNIT)과 맞는다", () => {
+    const sz = (latex: string) => {
+      const x = generateEquationXml(latexLikeToEqEdit(latex))
+      const m = /width="(\d+)"[^>]*height="(\d+)"/.exec(x)!
+      return { w: +m[1], h: +m[2], bl: +/baseLine="(\d+)"/.exec(x)![1] }
+    }
+    const near = (got: number, want: number, tol: number, what: string) =>
+      assert.ok(Math.abs(got - want) <= want * tol, `${what}: ${got} vs 한글 ${want}`)
+    // 분수 여럿이 이어진 식 — 종전엔 앞 분수를 모두 분자로 쌓아 높이 8083(한글 2760)
+    const f = sz("E_2=\\frac{4+5+6}{6}+\\frac{3}{6}\\cdot\\frac{7}{2}=\\frac{17}{4}")
+    near(f.h, 2760, 0.05, "분수 이어진 식 높이")
+    near(f.w, 15204, 0.08, "분수 이어진 식 폭")
+    near(sz("n=2").w, 2754, 0.03, "n=2 폭")
+    const sub = sz("x_{n}")
+    near(sub.h, 1450, 0.03, "아래첨자 높이")
+    assert.equal(sub.bl, 71)
+    near(sz("\\sum_{k=1}^{n}").h, 3281, 0.05, "∑ 위아래 끝 높이")
+    near(sz("\\int_0^1").h, 3089, 0.05, "∫ 끝 높이")
+    near(sz("\\{1,\\dots,x\\}").w, 4218, 0.12, "중괄호 집합 폭")
+  })
+
+  it("수식 글자 크기는 놓인 run 의 글자 크기를 따른다 (10pt 본문에 12pt 수식 금지)", async () => {
+    const buf = await markdownToHwpx("본문 $\\frac{a}{b}$ 끝", { inlineMath: true })
+    const zip = await JSZip.loadAsync(buf)
+    const sec = await zip.file("Contents/section0.xml")!.async("string")
+    const hdr = await zip.file("Contents/header.xml")!.async("string")
+    const m = /<hp:run charPrIDRef="(\d+)"[^>]*><hp:equation [^>]*baseUnit="(\d+)"[\s\S]*?<hp:sz width="(\d+)"[^>]*height="(\d+)"/.exec(sec)!
+    const height = +new RegExp(`<hh:charPr\\b[^>]*?\\bid="${m[1]}"[^>]*?\\bheight="(\\d+)"`).exec(hdr)![1]
+    assert.equal(+m[2], height)
+    // 한글 실측 분수 높이 — 10pt 2250, 12pt 2760 (크기에 정비례하지 않고 0.75pt 격자로 맞춘다)
+    const want = ({ 1000: 2250, 1200: 2760 } as Record<number, number>)[height]
+    assert.ok(want && Math.abs(+m[4] - want) <= want * 0.02, `분수 높이 ${m[4]} vs 한글 ${want} (${height})`)
   })
 })

@@ -8,7 +8,7 @@
 
 import { CHAR_NORMAL, PARA_NORMAL, escapeXml } from "./gen-ids.js"
 import { CONVERT_MAP, MIDDLE_CONVERT_MAP } from "./equation.js"
-import { measureEquation } from "./equation-metrics.js"
+import { equationBox } from "./equation-metrics.js"
 
 // 비신뢰 입력 가드 — markdownToHwpx는 MCP/CLI로 임의 입력을 받는다 (리뷰 #39 ·2).
 const MAX_EQUATION_SOURCE = 10_000
@@ -104,7 +104,33 @@ export const COMMAND_MAP: Record<string, string> = {
   // 없으면 따옴표 폴백 "perp"·"square" 로 글자가 찍혔다(시험지 수식 생성 왕복)
   perp: "BOT",
   square: "□",
+  // 아래는 한글 2024 수식 편집기 재계산으로 기호 한 글자 폭이 나오는 것을 확인한 토큰 — 없으면 "dots"·"varphi" 글자로 찍혔다
+  dots: "LDOTS",
+  iff: "LRARROW",
+  implies: "RARROW",
+  impliedby: "LARROW",
+  varphi: "varphi",
+  vartheta: "vartheta",
+  varepsilon: "varepsilon",
 }
+
+/**
+ * 한 토큰으로 되읽히지 않아 COMMAND_MAP 고정점 대상이 아닌 대응 — 값은 EqEdit 조각.
+ * 빈 문자열은 지운다: 크기·표시 지시(\big·\displaystyle)는 한글이 괄호·식 크기를 스스로 정한다.
+ * 공백 폭은 한글 실측(~ 0.47em, ` 0.06em)으로 \quad = 1em, \qquad = 2em.
+ */
+const LATEX_ALIASES: Record<string, string> = {
+  lt: "<", gt: ">",
+  prime: "prime", parallel: "PVER",
+  quad: "~~", qquad: "~~~~",
+  displaystyle: "", textstyle: "", scriptstyle: "", limits: "", nolimits: "",
+  big: "", Big: "", bigg: "", Bigg: "",
+  bigl: "", bigr: "", Bigl: "", Bigr: "", biggl: "", biggr: "", Biggl: "", Biggr: "",
+  bigm: "", Bigm: "",
+}
+
+/** 칠판 굵은 글자 — 한글 수식이 유니코드 글자 그대로 그린다(재계산 폭 1em 확인). 없는 글자는 로만체로 */
+const BLACKBOARD: Record<string, string> = { R: "ℝ", N: "ℕ", Z: "ℤ", Q: "ℚ", C: "ℂ" }
 
 /**
  * EqEdit 함수 키워드 — 렌더러가 로만체 함수명으로 아는 어휘. 되읽기(hmlToLatex)가
@@ -242,8 +268,17 @@ function readCommand(input: string, idx: number, depth: number): ReadResult {
   const command = name.value
 
   if (command === "\\") return { value: "#", next: name.next }
+  // 글자 중괄호 \{ \} — EqEdit 맨 { } 는 묶음이라 안 보인다. LEFT/RIGHT 로 그리고 짝은 convertLatexFragment 가 맞춘다
+  if (command === "{") return { value: "LEFT {", next: name.next }
+  if (command === "}") return { value: "RIGHT }", next: name.next }
 
-  if (command === "frac") {
+  if (command === "binom") {
+    const n = readGroupOrToken(input, name.next, depth)
+    const k = readGroupOrToken(input, n.next, depth)
+    return { value: `LEFT ( {matrix{${n.value} # ${k.value}}} RIGHT )`, next: k.next }
+  }
+
+  if (command === "frac" || command === "dfrac" || command === "tfrac") {
     const num = readGroupOrToken(input, name.next, depth)
     const den = readGroupOrToken(input, num.next, depth)
     return { value: `{${num.value}} over {${den.value}}`, next: den.next }
@@ -314,7 +349,23 @@ function readCommand(input: string, idx: number, depth: number): ReadResult {
   if (command === ";" || command === ":") return { value: "~", next: name.next }
   if (command === "!") return { value: "", next: name.next }
 
-  if (command === "mathrm" || command === "text") {
+  // 글꼴 지시 — 굵게는 EqEdit bold, 기울임·필기체는 본문만(한글 수식 기본이 기울임), 칠판체는 유니코드 글자
+  if (command === "mathbf" || command === "boldsymbol" || command === "bm") {
+    const body = readGroupOrToken(input, name.next, depth)
+    return { value: `bold{${body.value}}`, next: body.next }
+  }
+  if (command === "mathit" || command === "mathcal" || command === "mathscr" || command === "mathsf") {
+    const body = readGroupOrToken(input, name.next, depth)
+    return { value: `{${body.value}}`, next: body.next }
+  }
+  if (command === "mathbb") {
+    const body = readGroupOrToken(input, name.next, depth)
+    const ch = BLACKBOARD[body.value.trim()]
+    return { value: ch ?? `rm{${body.value}}`, next: body.next }
+  }
+  if (Object.hasOwn(LATEX_ALIASES, command)) return { value: LATEX_ALIASES[command], next: name.next }
+
+  if (command === "mathrm" || command === "text" || command === "operatorname") {
     // 리터럴 텍스트 — 변환하지 않고 EqEdit 따옴표로 보호 (int가 ∫로 렌더 방지).
     // hmlToLatex는 단일 토큰 따옴표를 \text{...}로 되읽어 고정점이 된다.
     const start = skipSpaces(input, name.next)
@@ -373,6 +424,12 @@ function convertLatexFragment(input: string, depth: number): string {
     idx++
   }
 
+  // LEFT/RIGHT 는 한 묶음 안에서 짝이어야 한다 — 짝 없는 \{ ·\} (집합 한쪽만 쓴 식)는 보이지 않는 쪽 "." 으로 닫는다
+  if (/(?<!\\left|\\right)\\[{}]/.test(input)) {
+    const lefts = out.match(/\bLEFT\b/g)?.length ?? 0, rights = out.match(/\bRIGHT\b/g)?.length ?? 0
+    if (lefts > rights) out += " RIGHT .".repeat(lefts - rights)
+    else if (rights > lefts) out = "LEFT . ".repeat(rights - lefts) + out
+  }
   return normalizeEqEdit(out)
 }
 
@@ -400,23 +457,23 @@ interface EquationMetrics {
 }
 
 /** 상자 크기는 스크립트 구조로 잰다(equation-metrics) — baseUnit 1200 기준 HWPUNIT, 기준선은 높이 % */
-function estimateEquationMetrics(script: string): EquationMetrics {
-  const { w, a, d } = measureEquation(script)
+function estimateEquationMetrics(script: string, unit: number): EquationMetrics {
+  const { width, height, baseline } = equationBox(script, unit)
   return {
-    width: Math.min(Math.max(Math.round(w * EQ_BASE_UNIT), 200), 40000),
-    height: Math.max(Math.round((a + d) * EQ_BASE_UNIT), 200),
-    baseline: Math.round((100 * a) / (a + d)),
+    width: Math.min(Math.max(Math.round(width), 200), 40000),
+    height: Math.max(Math.round(height), 200),
+    baseline: Math.round(baseline),
   }
 }
 
 /** eqId 기본값은 블록 수식(zOrder=블록 순번) 규약 — 인라인 수식(md-runs)은 따로 매긴 id 를 넘긴다 */
-export function generateEquationXml(script: string, zOrder: number = 0, eqId: number = 2_000_000_001 + zOrder): string {
-  const { width, height, baseline } = estimateEquationMetrics(script)
+export function generateEquationXml(script: string, zOrder: number = 0, eqId: number = 2_000_000_001 + zOrder, baseUnit: number = EQ_BASE_UNIT): string {
+  const { width, height, baseline } = estimateEquationMetrics(script, baseUnit)
 
   return `<hp:equation id="${eqId}" zOrder="${zOrder}" numberingType="EQUATION" ` +
     `textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" ` +
     `version="Equation Version 60" baseLine="${baseline}" textColor="#000000" ` +
-    `baseUnit="${EQ_BASE_UNIT}" lineMode="CHAR" font="HYhwpEQ">` +
+    `baseUnit="${baseUnit}" lineMode="CHAR" font="HYhwpEQ">` +
     `<hp:sz width="${width}" widthRelTo="ABSOLUTE" height="${height}" heightRelTo="ABSOLUTE" protect="0"/>` +
     `<hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" ` +
     `vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/>` +
@@ -424,6 +481,28 @@ export function generateEquationXml(script: string, zOrder: number = 0, eqId: nu
     `<hp:shapeComment>수식입니다.</hp:shapeComment>` +
     `<hp:script>${escapeXml(script)}</hp:script>` +
     `</hp:equation>`
+}
+
+/**
+ * 수식 글자 크기(baseUnit)를 그 수식이 놓인 run 의 글자 크기로 — 한글에서 수식을 넣으면 둘레 글자 크기를 따른다.
+ * 생성 시점엔 run 글자 크기를 모르니(서식은 header 가 정한다) 묶기 직전에 header 의 charPr 높이로 맞추고 상자도 같은 비율로 줄인다.
+ * 12pt 로 고정하면 10pt 본문에서 수식만 커져 줄 높이·글자 사이가 어긋났다.
+ */
+const unescapeXml = (s: string): string =>
+  s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&")
+
+export function fitEquationsToRunSize(sectionXml: string, headerXml: string): string {
+  if (!sectionXml.includes("<hp:equation ")) return sectionXml
+  const heights = new Map<string, number>()
+  for (const m of headerXml.matchAll(/<hh:charPr\b[^>]*?\bid="(\d+)"[^>]*?\bheight="(\d+)"/g)) heights.set(m[1], +m[2])
+  // 비율로 늘리지 않고 그 크기로 다시 잰다 — 한글은 글자 폭을 크기마다 0.75pt 격자로 반올림해 크기에 비례하지 않는다
+  return sectionXml.replace(
+    /(<hp:run charPrIDRef="(\d+)"[^>]*>)<hp:equation id="(\d+)" zOrder="(\d+)"[^>]*?baseUnit="(\d+)"[\s\S]*?<hp:script>([\s\S]*?)<\/hp:script><\/hp:equation>/g,
+    (all, run, cid, id, z, bu, script) => {
+      const size = heights.get(cid)
+      if (!size || size === +bu) return all
+      return run + generateEquationXml(unescapeXml(script), +z, +id, size)
+    })
 }
 
 export function generateEquationParagraph(input: string, zOrder: number = 0): string {
