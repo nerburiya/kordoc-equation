@@ -64,6 +64,8 @@ Markdown의 LaTeX 수식(`$…$`, `--inline-math`)을 HWPX로 만들면 한글�
 - 적분 기호는 글꼴(Times New Roman)의 ∫를 세로로 늘여 그리므로 한글 PDF보다 가늡니다.
 - 글자 폭 상수는 HYhwpEQ 글꼴의 기본 수식 글꼴 기준입니다. 다른 수식 글꼴은 재지 않았습니다.
 
+작업 현황과 남은 문제 목록은 [docs/equation-status.md](docs/equation-status.md)에 정리했습니다.
+
 ## 참고한 프로젝트
 
 - **[chrisryugj/kordoc](https://github.com/chrisryugj/kordoc)** (MIT): 이 저장소의 원본입니다. 수정한 파일 외의 모든 코드·문서·시험은 원 프로젝트의 것입니다.
