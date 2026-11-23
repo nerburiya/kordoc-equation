@@ -79,105 +79,258 @@ function wordWidth(x: string, q: (em: number) => number = em => em): number {
   return [...x].reduce((s, c) => s + q(charWidth(c)), 0)
 }
 
-interface Box { w: number; a: number; d: number }
-const ATOM = (w: number): Box => ({ w, a: 0.86, d: 0.14 })
+/** 글자 종류 — 그릴 때 글꼴·기울임을 고른다(var 기울임, text 본문 글꼴, 나머지 바로 선 수식 글꼴) */
+export type GlyphClass = "var" | "num" | "op" | "fn" | "text" | "big" | "delim"
+/**
+ * 그릴 조각 — 원점은 수식 기준선 왼쪽, y 는 위가 +, 단위 em(크기 1 기준). 상자를 재는 구조 해석이 그대로 낸다.
+ * t: 글자(tok 은 스크립트 토큰 — [x, x+w] 칸 가운데에, sy 는 늘인 괄호의 세로 배율), r: 가로줄(분수선·윗줄), p: 꺾은선(근호)
+ */
+export type EquationOp =
+  | { k: "t"; x: number; y: number; w: number; size: number; tok: string; cls: GlyphClass; sy?: number }
+  | { k: "r"; x: number; y: number; w: number; size: number }
+  | { k: "p"; pts: Array<[number, number]>; size: number }
+export interface EquationLayout { w: number; a: number; d: number; ops: EquationOp[] }
+interface Box extends EquationLayout { delim?: "L" | "R" }
+
+const ATOM = (w: number, ops: EquationOp[] = []): Box => ({ w, a: 0.86, d: 0.14, ops })
 const SCRIPT_SCALE = 0.62
+
+/** 조각들을 (dx, dy) 로 옮기고 s 배 — 첨자는 0.62 배로 줄여 붙인다 */
+function moveOps(ops: EquationOp[], dx: number, dy: number, s = 1): EquationOp[] {
+  return ops.map((o): EquationOp => o.k === "p"
+    ? { ...o, pts: o.pts.map(([x, y]): [number, number] => [x * s + dx, y * s + dy]), size: o.size * s }
+    : { ...o, x: o.x * s + dx, y: o.y * s + dy, w: o.w * s, size: o.size * s })
+}
 
 /** 한글은 수식 글자 폭을 75 HWPUNIT(0.75pt) 격자로 반올림한다 — 같은 "a"(0.5em)가 12pt 600·10pt 525·9pt 450 (9·10·11·12·15pt 실측) */
 const GLYPH_GRID = 75
 
-/** 스크립트 → em 상자 (폭·기준선 위·아래). unit 은 수식 글자 크기(baseUnit, HWPUNIT) — 글자 폭 반올림에 쓴다 */
-export function measureEquation(script: string, unit = 1200): Box {
+/** 한 글자의 종류 — 라틴 글자 기울임, 숫자·소수점 바로, 더하기·관계 기호는 연산자, 나머지(괄호·문장부호·한글) 글 */
+function charClass(c: string): GlyphClass {
+  if (/[A-Za-z]/.test(c)) return "var"
+  if (/[0-9.]/.test(c)) return "num"
+  if (/[+\-=<>]/.test(c)) return "op"
+  return "text"
+}
+
+/**
+ * 스크립트 → em 상자 (폭·기준선 위·아래)와 그릴 조각. unit 은 수식 글자 크기(baseUnit, HWPUNIT) — 글자 폭 반올림에 쓴다.
+ * 생성기는 상자 크기(hp:sz)를, 렌더러는 같은 해석의 조각을 쓴다 — 둘이 어긋나지 않게 한 곳에서 낸다.
+ */
+export function measureEquation(script: string, unit = 1200): EquationLayout {
   let cur = unit
   const q = (em: number): number => (Math.round((em * cur) / GLYPH_GRID) * GLYPH_GRID) / cur
-  // 중괄호 폭탄 같은 기형 입력은 구조를 재지 않고 글자 폭 합으로 (재귀 깊이 상한)
+  // 중괄호 폭탄 같은 기형 입력은 구조를 재지 않고 글자 폭 합으로 (재귀 깊이 상한, 조각 없음 — 렌더러는 한 줄 글로)
   let depth = 0, deepest = 0
   for (const c of script) if (c === "{") deepest = Math.max(deepest, ++depth); else if (c === "}") depth--
   if (deepest > 64) return ATOM([...script.replace(/[{}\s]/g, "")].reduce((s, c) => s + charWidth(c), 0))
   const t = [...script.matchAll(/"[^"]*"|[A-Za-z]+|\d+(?:\.\d+)?|<->|->|<=|>=|!=|==|\+-|-\+|[{}^_#&`~]|[가-힣]+|\S/gu)].map(m => m[0])
   let i = 0
+  /** 행 정렬 — cases·eqalign·lpile 은 왼쪽, rpile 오른쪽, 나머지 가운데 */
+  let rowAlign: "left" | "center" | "right" = "center"
+
+  /** 낱말 토큰 → 상자. 표에 있는 이름(그리스·함수·기호)은 한 조각, 나머지는 글자마다 */
+  const word = (x: string): Box => {
+    const one = (w: number, cls: GlyphClass): Box => ATOM(w, [{ k: "t", x: 0, y: 0, w, size: 1, tok: x, cls }])
+    if (x in GREEK || GREEK_NAMES.has(x.toLowerCase())) return one(wordWidth(x, q), x === x.toLowerCase() ? "var" : "num")
+    if (FUNC_NAMES.has(x)) return one(wordWidth(x, q), "fn")
+    if (x in SYMBOLS) return one(wordWidth(x, q), "op")
+    const quoted = x[0] === '"'
+    const ops: EquationOp[] = []
+    let w = 0
+    for (const c of quoted ? [...x.slice(1, -1)] : [...x]) {
+      const cw = q(charWidth(c))
+      if (c !== " " && c !== "`" && c !== "~") ops.push({ k: "t", x: w, y: 0, w: cw, size: 1, tok: c, cls: quoted ? "text" : charClass(c) })
+      w += cw
+    }
+    return ATOM(w, ops)
+  }
+
+  /** 늘이는 괄호 — 사이 항목 높이에 맞춘다(괄호 글자 높이 1em, 가운데 0.25em 기준) */
+  const stretch = (b: Box, a: number, d: number): void => {
+    b.a = a
+    b.d = d
+    const H = a + d
+    for (const o of b.ops) if (o.k === "t" && H > 1.15) { o.sy = H / 1.05; o.y = (a - d) / 2 - 0.3 * o.sy }
+  }
+
   const combine = (items: Array<Box | null>): Box => {
     if (items.includes(null)) {
       // 행(#)으로 쌓은 묶음 — 행마다 높이에 간격 0.2em
       const rows: Box[][] = [[]]
       for (const x of items) x ? rows[rows.length - 1].push(x) : rows.push([])
       const rs = rows.map(r => combine(r)), H = rs.reduce((s, r) => s + r.a + r.d + 0.2, 0)
-      return { w: Math.max(...rs.map(r => r.w)), a: H / 2 + 0.25, d: H / 2 - 0.25 }
+      const w = Math.max(...rs.map(r => r.w)), a = H / 2 + 0.25
+      const ops: EquationOp[] = []
+      let top = a
+      for (const r of rs) {
+        const yb = top - r.a, dx = rowAlign === "left" ? 0 : rowAlign === "right" ? w - r.w : (w - r.w) / 2
+        ops.push(...moveOps(r.ops, dx, yb))
+        top = yb - r.d - 0.2
+      }
+      return { w, a, d: H / 2 - 0.25, ops }
     }
     const bs = items as Box[]
-    return bs.length ? { w: bs.reduce((s, x) => s + x.w, 0), a: Math.max(...bs.map(x => x.a)), d: Math.max(...bs.map(x => x.d)) } : ATOM(0)
+    if (!bs.length) return ATOM(0)
+    // LEFT … RIGHT 짝마다 사이 높이로 괄호를 늘인다. 짝 없는 쪽은 줄 전체 높이로
+    const open: number[] = []
+    const span = (from: number, to: number): [number, number] => {
+      let a = 0.86, d = 0.14
+      for (let k = from; k < to; k++) if (!bs[k].delim) { a = Math.max(a, bs[k].a); d = Math.max(d, bs[k].d) }
+      return [a, d]
+    }
+    bs.forEach((b, k) => {
+      if (b.delim === "L") open.push(k)
+      else if (b.delim === "R") {
+        const j = open.pop() ?? -1
+        const [a, d] = span(j + 1, k)
+        stretch(b, a, d)
+        if (j >= 0) stretch(bs[j], a, d)
+      }
+    })
+    for (const j of open) { const [a, d] = span(j + 1, bs.length); stretch(bs[j], a, d) }
+    const ops: EquationOp[] = []
+    let x = 0
+    for (const b of bs) { ops.push(...moveOps(b.ops, x, 0)); x += b.w }
+    return { w: x, a: Math.max(...bs.map(b => b.a)), d: Math.max(...bs.map(b => b.d)), ops }
   }
+
   const seq = (stop?: string): Box => {
     const items: Array<Box | null> = []
     while (i < t.length && t[i] !== stop) {
       if (t[i] === "over") {
         i++
         // 분자는 바로 앞 항목 하나(한글 편집기·읽기 경로 elemStart 와 같은 결합) — 앞 전체를 묶으면 "a= {1} over {2} + {3} over {4}" 의 분수가 겹겹이 쌓여 높이가 3배가 됐다
-        const prev = items.length && items[items.length - 1] ? items.pop()! : ATOM(0.5)
-        const num = prev, den = elem() ?? ATOM(0.5)
-        // 분자 위·분모 아래 — 수식 축(분수선)이 기준선 위 0.22em
-        items.push({ w: Math.max(num.w, den.w) + 0.5, a: num.a + num.d + 0.52, d: den.a + den.d - 0.22 })
+        const num = items.length && items[items.length - 1] ? items.pop()! : ATOM(0.5), den = elem() ?? ATOM(0.5)
+        // 분자 밑 0.52em·분모 위 0.22em, 분수선은 그 사이 0.37em(수식 축)
+        const w = Math.max(num.w, den.w) + 0.5
+        items.push({
+          w, a: num.a + num.d + 0.52, d: den.a + den.d - 0.22,
+          ops: [...moveOps(num.ops, (w - num.w) / 2, num.d + 0.52), ...moveOps(den.ops, (w - den.w) / 2, 0.22 - den.a), { k: "r", x: 0.12, y: 0.37, w: w - 0.24, size: 1 }],
+        })
       } else if (t[i] === "#") { i++; items.push(null) }
       else if (t[i] === "&") { i++; items.push(ATOM(0.6)) }
       else { const e = elem(); if (e) items.push(e) }
     }
     return combine(items)
   }
+
+  /** 근호 — 왼쪽 0.85em 에 꺾은선, 본문 위로 윗줄 */
+  const radical = (arg: Box, index: Box | null): Box => {
+    const top = arg.a + 0.1, bot = -arg.d, mid = bot + (top - bot) * 0.45, w = arg.w + 1.17
+    const ops: EquationOp[] = [
+      { k: "p", pts: [[0.08, mid], [0.22, mid + 0.07], [0.45, bot], [0.78, top], [w - 0.12, top]], size: 1 },
+      ...moveOps(arg.ops, 0.85, 0),
+    ]
+    if (index) ops.push(...moveOps(index.ops, 0.02, mid + 0.12, SCRIPT_SCALE))
+    return { w, a: arg.a + 0.15, d: arg.d, ops }
+  }
+
+  const ACCENT_GLYPH: Record<string, string> = { vec: "→", dyad: "↔", hat: "^", check: "ˇ", tilde: "~", dot: "˙", ddot: "¨", acute: "´", grave: "`", arch: "⌒" }
+
   const base = (): Box | null => {
     const x = t[i]
     if (x === undefined) return null
     i++
     if (x === "{") { const g = seq("}"); if (t[i] === "}") i++; return g }
     if (x === "}") return null
+    // ponytail: 글꼴 지시(rm·it·bold)는 폭만 0 — 그릴 때 글꼴을 바꾸지 않는다
     if (ZERO_WIDTH.has(x)) return ATOM(0)
     // 늘이는 괄호 — 다음 토큰이 괄호 글자("{" 도 묶음이 아니라 글자). 실측 ( ) 0.375em, { } | 0.5em, "." 은 안 보이는 쪽
     if (x === "LEFT" || x === "RIGHT" || x === "left" || x === "right") {
       const d = t[i++] ?? "."
-      return ATOM(d === "." ? 0 : d === "(" || d === ")" ? 0.375 : 0.5)
+      const w = d === "." ? 0 : d === "(" || d === ")" ? 0.375 : 0.5
+      const b = ATOM(w, d === "." ? [] : [{ k: "t", x: 0, y: 0, w, size: 1, tok: d, cls: "delim" }])
+      b.delim = x.toUpperCase() === "LEFT" ? "L" : "R"
+      return b
     }
-    if (x === "lim" || x === "Lim") return { w: 1.812, a: 0.95, d: 0.237 }
-    if (x === "sqrt") { const arg = base() ?? ATOM(0.5); return { w: arg.w + 1.17, a: arg.a + 0.15, d: arg.d } }
+    if (x === "lim" || x === "Lim") return { w: 1.812, a: 0.95, d: 0.237, ops: [{ k: "t", x: 0, y: 0, w: 1.812, size: 1, tok: "lim", cls: "fn" }] }
+    if (x === "sqrt") return radical(base() ?? ATOM(0.5), null)
     if (x === "root") {
       const n = base()
-      if (t[i] !== "of") return { w: (n?.w ?? 0.5) + 1.17, a: (n?.a ?? 0.86) + 0.15, d: n?.d ?? 0.14 }
+      if (t[i] !== "of") return radical(n ?? ATOM(0.5), null)
       i++
-      const arg = base() ?? ATOM(0.5)
-      return { w: arg.w + 1.17, a: arg.a + 0.15, d: arg.d }
+      return radical(base() ?? ATOM(0.5), n)
     }
-    if (ACCENTS.test(x)) { const arg = base() ?? ATOM(0.5); return { w: arg.w + 0.1, a: arg.a + 0.2, d: arg.d } }
+    if (ACCENTS.test(x)) {
+      const arg = base() ?? ATOM(0.5), w = arg.w + 0.1
+      const ops = moveOps(arg.ops, 0.05, 0)
+      if (x === "bar") ops.push({ k: "r", x: 0.05, y: arg.a + 0.1, w: arg.w, size: 1 })
+      else if (x === "under") ops.push({ k: "r", x: 0.05, y: -arg.d - 0.08, w: arg.w, size: 1 })
+      else ops.push({ k: "t", x: 0.05, y: arg.a - 0.55, w: arg.w, size: 0.8, tok: ACCENT_GLYPH[x] ?? "", cls: "op" })
+      return { w, a: arg.a + 0.2, d: arg.d, ops }
+    }
     if (STACKS.test(x)) {
+      const outer = rowAlign
+      rowAlign = /^(?:cases|eqalign|lpile)$/.test(x) ? "left" : x === "rpile" ? "right" : "center"
       const arg = base() ?? ATOM(1)
-      return { w: arg.w + (x === "cases" ? 0.6 : /^[pbd]matrix$/.test(x) ? 0.8 : 0), a: arg.a, d: arg.d }
+      rowAlign = outer
+      const pair: Record<string, [string, string]> = { pmatrix: ["(", ")"], bmatrix: ["[", "]"], dmatrix: ["|", "|"] }
+      if (x === "cases") {
+        const brace = ATOM(0.6, [{ k: "t", x: 0, y: 0, w: 0.5, size: 1, tok: "{", cls: "delim" }])
+        stretch(brace, arg.a, arg.d)
+        return { w: arg.w + 0.6, a: arg.a, d: arg.d, ops: [...brace.ops, ...moveOps(arg.ops, 0.6, 0)] }
+      }
+      if (pair[x]) {
+        const [l, r] = pair[x], L = ATOM(0.4, [{ k: "t", x: 0, y: 0, w: 0.4, size: 1, tok: l, cls: "delim" }]), R = ATOM(0.4, [{ k: "t", x: 0, y: 0, w: 0.4, size: 1, tok: r, cls: "delim" }])
+        stretch(L, arg.a, arg.d)
+        stretch(R, arg.a, arg.d)
+        return { w: arg.w + 0.8, a: arg.a, d: arg.d, ops: [...L.ops, ...moveOps(arg.ops, 0.4, 0), ...moveOps(R.ops, arg.w + 0.4, 0)] }
+      }
+      return arg
     }
-    // 큰 연산자 실측: ∫ 1.31em·높이 1.887·기준선 66%, ∑ 1.25em·1.359·76%
-    if (x === "int" || x === "oint" || x === "dint" || x === "tint") return { w: wordWidth(x, q), a: 1.245, d: 0.642 }
-    if (BIG_OPS.has(x)) return { w: 1.25, a: 1.033, d: 0.326 }
-    return ATOM(wordWidth(x, q))
+    // 큰 연산자 실측: ∫ 1.31em·높이 1.887·기준선 66%, ∑ 1.25em·1.359·76%. 글자는 수식 축(0.25em)에 가운데로 키워 그린다
+    if (x === "int" || x === "oint" || x === "dint" || x === "tint") {
+      // 적분 기호는 상자 높이(1.887em)로 세로로 늘인다 — 키운 글자는 폭까지 커져 옆 첨자와 겹친다
+      const b: Box = { w: wordWidth(x, q), a: 1.245, d: 0.642, ops: [] }
+      b.ops.push({ k: "t", x: 0, y: 0, w: b.w, size: 1, tok: x, cls: "big" })
+      stretch(b, b.a, b.d)
+      return b
+    }
+    if (BIG_OPS.has(x)) return { w: 1.25, a: 1.033, d: 0.326, ops: [{ k: "t", x: 0, y: -0.22, w: 1.25, size: 1.3, tok: x, cls: "big" }] }
+    return word(x)
   }
-  // 원자 + 위·아래 첨자 사슬 (첨자는 0.62 배). 실측: 옆 첨자 위 a 1.045·아래 d 0.35(1.208em·71%),
+
+  // 원자 + 위·아래 첨자 (첨자는 0.62 배). 실측: 옆 첨자 위 a 1.045·아래 d 0.35(1.208em·71%),
   // ∑·lim 은 끝을 기호 위·아래로 쌓고(∑_{k=1}^{n} 2.734em·63%), ∫ 은 옆에 높게 붙인다(∫_0^1 2.574em·62%)
   const elem = (): Box | null => {
     const head = t[i]
-    let b = base()
+    const b = base()
     if (!b) return null
-    const stacked = UNDER_OVER.has(head), integral = /^(?:int|oint|dint|tint)$/.test(head)
-    const baseW = b.w
+    let sup: Box | null = null, sub: Box | null = null
     while (t[i] === "^" || t[i] === "_") {
-      const sup = t[i] === "^"
+      const isSup = t[i] === "^"
       i++
       const outer = cur
       cur = outer * SCRIPT_SCALE
-      const s = base() ?? { w: 0, a: 0, d: 0 }
+      const s = base() ?? { w: 0, a: 0, d: 0, ops: [] }
       cur = outer
-      const h = (s.a + s.d) * SCRIPT_SCALE, sw = s.w * SCRIPT_SCALE
-      if (stacked) b = { w: Math.max(b.w, Math.max(baseW, sw) + 0.06), a: sup ? b.a + h + 0.07 : b.a, d: sup ? b.d : b.d + h + 0.07 }
-      else if (integral) b = { w: Math.max(b.w, baseW + sw), a: sup ? b.a + h * 0.55 : b.a, d: sup ? b.d : b.d + h * 0.55 }
-      // 위·아래 첨자를 함께 달면 폭은 넓은 쪽만
-      else b = sup ? { w: Math.max(b.w, baseW + sw), a: Math.max(b.a, b.a * 0.45 + h), d: b.d } : { w: Math.max(b.w, baseW + sw), a: b.a, d: Math.max(b.d, h - 0.27) }
+      if (isSup) sup = s; else sub = s
     }
-    return b
+    if (!sup && !sub) return b
+    const S = SCRIPT_SCALE, hs = (s: Box | null) => (s ? (s.a + s.d) * S : 0), ws = (s: Box | null) => (s ? s.w * S : 0)
+    if (UNDER_OVER.has(head)) {
+      const w = Math.max(b.w, ws(sup), ws(sub)) + 0.06
+      const ops = moveOps(b.ops, (w - b.w) / 2, 0)
+      if (sup) ops.push(...moveOps(sup.ops, (w - ws(sup)) / 2, b.a + 0.07 + sup.d * S, S))
+      if (sub) ops.push(...moveOps(sub.ops, (w - ws(sub)) / 2, -(b.d + 0.07 + sub.a * S), S))
+      return { w, a: sup ? b.a + hs(sup) + 0.07 : b.a, d: sub ? b.d + hs(sub) + 0.07 : b.d, ops }
+    }
+    const ops = [...b.ops]
+    if (/^(?:int|oint|dint|tint)$/.test(head)) {
+      const a = b.a + hs(sup) * 0.55, d = b.d + hs(sub) * 0.55
+      if (sup) ops.push(...moveOps(sup.ops, b.w, a - sup.a * S, S))
+      if (sub) ops.push(...moveOps(sub.ops, b.w - 0.15, -d + sub.d * S, S))
+      return { w: b.w + Math.max(ws(sup), ws(sub)), a, d, ops }
+    }
+    // 위·아래 첨자를 함께 달면 폭은 넓은 쪽만
+    let a = b.a, d = b.d
+    if (sup) { const top = b.a * 0.45 + hs(sup); a = Math.max(a, top); ops.push(...moveOps(sup.ops, b.w, top - sup.a * S, S)) }
+    if (sub) { const bot = hs(sub) - 0.27; d = Math.max(d, bot); ops.push(...moveOps(sub.ops, b.w, -bot + sub.d * S, S)) }
+    return { w: b.w + Math.max(ws(sup), ws(sub)), a, d, ops }
   }
-  return seq()
+  const r = seq()
+  return { w: r.w, a: r.a, d: r.d, ops: r.ops }
 }
 
 /**

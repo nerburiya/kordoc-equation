@@ -37,6 +37,8 @@ html, body { margin: 0; background: #e9e8e6; }
 .kordoc-document { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 16px 0; }
 .kordoc-page { position: relative; background: white; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
 .kordoc-page > svg { display: block; width: 100%; height: 100%; }
+/* HTML 에 넣은 SVG 는 xml:space="preserve" 를 무시해 조각 앞뒤 빈칸을 지운다 — 빈칸을 뺀 글이 빈칸까지 잰 textLength 로 늘어나 "이 므 로" 처럼 벌어졌다 */
+.kordoc-page text { white-space: pre; }
 @page { size: ${pageSize}; margin: 0; }
 @media print {
   html, body { background: white; }

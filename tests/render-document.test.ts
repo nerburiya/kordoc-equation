@@ -48,6 +48,8 @@ describe("render document: HTML", () => {
     assert.ok(html.includes("<title>a&lt;b&gt;&amp;&quot;c&quot;</title>"))
     assert.ok(!/https?:\/\//.test(html.replace(/xmlns="http:\/\/www\.w3\.org\/2000\/svg"/g, "")), "외부 자원 없음")
     assert.ok(html.includes("@page { size: 595.28pt 841.88pt; margin: 0; }"))
+    // 인라인 SVG 는 xml:space 를 무시해 조각 앞뒤 빈칸을 지운다 — 빈칸까지 잰 textLength 가 한글 글자 사이를 벌렸다
+    assert.ok(html.includes(".kordoc-page text { white-space: pre; }"))
   })
 })
 

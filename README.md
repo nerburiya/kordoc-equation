@@ -1,7 +1,7 @@
 # kordoc-equation
 
 > **이 저장소는 [chrisryugj/kordoc](https://github.com/chrisryugj/kordoc)의 개인 수정본입니다.**
-> 원 프로젝트의 4.25.5(커밋 `35573ec1`) 위에, Markdown 수식을 HWPX로 만들 때 한컴 한글과 어긋나던 문제를 고친 커밋 하나를 얹었습니다.
+> 원 프로젝트의 4.25.5(커밋 `35573ec1`) 위에, Markdown 수식을 HWPX로 만들 때 한컴 한글과 어긋나던 문제와 PDF 렌더에서 수식·한글 자간이 깨지던 문제를 고친 커밋을 얹었습니다.
 > kordoc 본체의 저작권과 라이선스(MIT)는 원 저작자 chrisryugj에게 있으며 `LICENSE`·`NOTICE`를 그대로 두었습니다.
 > 원 프로젝트가 공식으로 배포하거나 검토한 판이 아닙니다.
 
@@ -37,9 +37,22 @@ Markdown의 LaTeX 수식(`$…$`, `--inline-math`)을 HWPX로 만들면 한글�
 - 전체 시험 5,229개 중 실패 40건은 수정 전 코드에서도 똑같이 실패합니다. 선택 의존성(이미지 변환·OCR·QR)을 빼고 설치했거나, Windows에서 심볼릭 링크를 다루는 부분입니다. 이 수정으로 새로 생긴 실패는 없습니다.
 - 측정용 한글 자동화 스크립트는 이 저장소에 넣지 않았습니다. 측정은 Windows 11 + 한컴오피스 한글에서 했습니다.
 
+### PDF 렌더 (`kordoc render --format pdf`)
+
+예시 HWPX를 kordoc으로 PDF로 만들어, 한글이 직접 내보낸 PDF와 쪽마다 나란히 놓고 비교했습니다.
+
+| 증상 | 원인 | 수정 |
+| --- | --- | --- |
+| 수식이 `E_n`, `(1+2+…)/6`, `ast` 같은 한 줄 글자로 나옴 | 수식을 한 줄 유니코드 글로 바꿔 상자 폭에 눌러 그림. 맨 바깥 분수 하나만 쌓음 | 상자 크기를 재는 구조 해석(`measureEquation`)이 그릴 위치도 함께 내고, 그대로 조판해 그림: 안쪽 분수, 위·아래 첨자, ∑ 위아래 끝, 늘인 `LEFT`/`RIGHT` 괄호, 근호, 행렬·경우, 변수 기울임 (`equation-metrics.ts`, `src/render/equation-layout.ts`) |
+| 본문 한글이 "이 므 로", "해 석 :"처럼 벌어짐 | HTML에 넣은 SVG에서 Chromium이 `xml:space="preserve"`를 무시하고 조각 끝 빈칸을 지움. 빈칸까지 잰 `textLength`가 남은 폭을 글자 사이에 나눔. 한글 조판의 빈칸 폭과 글꼴 빈칸 폭(0.3em) 차이도 글자 사이로 들어감 | `.kordoc-page text { white-space: pre }` (`src/render/html.ts`). 빈칸 몫은 `word-spacing`으로 빈칸에만 줌 (`svg-content.ts`) |
+
+본문 한글 글자 x 위치를 한글 PDF와 비교한 결과(같은 줄 구성인 9쪽)는 중앙값 0.1~0.2pt입니다. 수정 전에는 수식 뒤 조각에서 글자당 2.5pt씩 벌어졌습니다.
+
 ### 아직 고치지 않은 것
 
-- kordoc 자체 렌더러의 PDF 출력(`render --format pdf`)은 여전히 수식을 한 줄 글자(`a/b`)로 그립니다(`src/render/equation-text.ts`). 수식이 제대로 보이는 PDF가 필요하면 HWPX를 한글에서 PDF로 내보내세요(`bench/hangul-com-pdf.ps1`).
+- 쪽에 걸친 표: 다음 쪽으로 넘어간 표 부분을 그리지 않습니다(렌더러 경고 "페이지에 걸친 표"). 수식과는 관계없는 원래 렌더러의 한계입니다.
+- `kordoc generate`의 공문서 프리셋(기본값)은 `$…$` 수식을 글자 그대로 둡니다.
+- 적분 기호는 글꼴(Times New Roman)의 ∫를 세로로 늘여 그리므로 한글 PDF보다 가늡니다.
 - 글자 폭 상수는 HYhwpEQ 글꼴의 기본 수식 글꼴 기준입니다. 다른 수식 글꼴은 재지 않았습니다.
 
 ## 참고한 프로젝트

@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url"
 import { toInt32, solveBoundaries, solveRowHeights } from "../src/render/layout.js"
 import { renderHwpxPages, renderHwpxToSvg } from "../src/render/index.js"
 import { latexToPlain } from "../src/render/equation-text.js"
-import { layoutFractions } from "../src/render/equation-layout.js"
+import { measureEquation } from "../src/hwpx/equation-metrics.js"
 import { hwpEquationToLatex } from "../src/hwp5/equation.js"
 import { buildPara, escapeXml } from "../src/render/svg-render.js"
 import { markdownToHwpx } from "../src/hwpx/generator.js"
@@ -272,14 +272,16 @@ describe("render: 수식 대체 글", () => {
     assert.equal(t("f LEFT ( x RIGHT ) = cases {-2x+a & (x LEQ a) # ax-6 & (x>a)}"), "f(x)={-2x+a (x≤a); ax-6 (x>a)")
     assert.equal(t("matrix {a & b # c & d}"), "a b; c d")
   })
-  it("수식 개체를 상자 폭에 맞춘 글로 그린다", async () => {
+  it("수식 개체를 조판해 그린다 — 위첨자는 작게 올리고, 한 줄 글 \"x²+1\" 로 누르지 않는다", async () => {
     const zip = await JSZip.loadAsync(await markdownToHwpx("본문입니다."))
     const secName = Object.keys(zip.files).find(n => /section0\.xml$/.test(n))!
     let sec = await zip.file(secName)!.async("string")
     sec = sec.replace("본문입니다.</hp:t>", `본문입니다.</hp:t><hp:equation baseLine="86" baseUnit="1000" textColor="#000000"><hp:sz width="3000" height="1100"/><hp:pos treatAsChar="1"/><hp:outMargin left="56" right="56" top="0" bottom="0"/><hp:script>x ^{2} +1</hp:script></hp:equation>`)
     zip.file(secName, sec)
     const r = await renderHwpxToSvg(new Uint8Array(await zip.generateAsync({ type: "nodebuffer" })), { reflow: true })
-    assert.ok(/<text [^>]*textLength="30"[^>]*>x²\+1<\/text>/.test(r.svg), "수식 글 x²+1 이 상자 폭 30pt 로")
+    const x = /<text x="[\d.]+" y="([\d.]+)"[^>]*font-size="([\d.]+)"[^>]*font-style="italic"[^>]*>x<\/text>/.exec(r.svg), two = /<text x="[\d.]+" y="([\d.]+)"[^>]*font-size="([\d.]+)"[^>]*>2<\/text>/.exec(r.svg)
+    assert.ok(x && two && Number(two[1]) < Number(x[1]) && Number(two[2]) < Number(x[2]), "위첨자 2 가 x 보다 위에 작게")
+    assert.ok(!r.svg.includes(">x²+1<"), "한 줄 글 아님")
   })
   it("분수가 든 수식은 분자·가로선·분모로 쌓아 그린다 — 한 줄 \"9/2\" 로 눌러 그리지 않는다", async () => {
     const zip = await JSZip.loadAsync(await markdownToHwpx("본문입니다."))
@@ -293,12 +295,21 @@ describe("render: 수식 대체 글", () => {
     assert.ok(/<line [^>]*stroke-width/.test(r.svg), "가로선")
     assert.ok(!r.svg.includes(">9/2<"), "한 줄 9/2 아님")
   })
-  it("분수 배치 — 맨 바깥 \\frac 만 쌓고 앞뒤 글은 한 줄, 행이 든 수식은 null", () => {
-    const l = layoutFractions(hwpEquationToLatex("f(x)= {x} over {2} +1"))!
-    assert.deepEqual(l.ops.filter(o => o.text).map(o => o.text), ["f(x)=", "x", "2", "+1"])
-    assert.equal(l.ops.filter(o => o.rule).length, 1)
-    assert.equal(layoutFractions(hwpEquationToLatex("x ^{2} +1")), null)
-    assert.equal(layoutFractions(hwpEquationToLatex("cases {a # b over 2}")), null)
+  it("수식 조판 — 안쪽 분수도 쌓고, 첨자는 올리고 내리며, LEFT/RIGHT 괄호는 사이 높이로 늘인다", () => {
+    const texts = (sc: string) => measureEquation(sc, 1000).ops.flatMap(o => (o.k === "t" ? [o] : []))
+    // 분자 안의 분수 — 종전엔 맨 바깥만 쌓고 안쪽은 "1/2" 한 줄 글
+    const nested = measureEquation("{ {1} over {2} } over {3}", 1000)
+    assert.equal(nested.ops.filter(o => o.k === "r").length, 2, "가로선 둘")
+    const t = texts("E _{n} ^{2}"), sub = t.find(o => o.tok === "n")!, sup = t.find(o => o.tok === "2")!
+    assert.ok(sub.y < 0 && sup.y > 0 && sub.size < 1, "아래첨자는 기준선 아래, 위첨자는 위, 작게")
+    const paren = texts("LEFT ( {1} over {4} RIGHT )").filter(o => o.cls === "delim")
+    assert.ok(paren.length === 2 && paren.every(o => (o.sy ?? 1) > 1.5), "괄호가 분수 높이로 늘어난다")
+    assert.ok(measureEquation("sqrt {2}", 1000).ops.some(o => o.k === "p"), "근호 꺾은선")
+  })
+  it("빈칸 몫은 빈칸에 — 한컴 빈칸 폭·양쪽 정렬 늘임을 word-spacing 으로 줘 textLength 가 한글 글자 사이를 벌리지 않는다", async () => {
+    const r = await renderHwpxToSvg(await markdownToHwpx("해석: 고객의 중앙값은 평균보다 작다."), { reflow: true })
+    const m = /<text [^>]*word-spacing="([\d.-]+)"[^>]*textLength="[\d.]+"[^>]*>해석: 고객의/.exec(r.svg)
+    assert.ok(m && Number(m[1]) > 0, "빈칸마다 더 준다(한컴 빈칸이 뷰어 글꼴 빈칸보다 넓다)")
   })
 })
 

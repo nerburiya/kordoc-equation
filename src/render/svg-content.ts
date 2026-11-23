@@ -6,7 +6,7 @@ import { DEFAULT_CHAR, type RenderStyles } from "./head-styles.js"
 import { glyphWidth, joinsJamo } from "./reflow.js"
 import { mapPuaText } from "../shared/pua.js"
 import { latexToPlain } from "./equation-text.js"
-import { layoutFractions } from "./equation-layout.js"
+import { equationSvg } from "./equation-layout.js"
 import { hwpEquationToLatex } from "../hwp5/equation.js"
 import { RegionCollector, type PageBBox } from "./scene.js"
 import { nextParaNumber, type NumberCounters } from "./para-number.js"
@@ -416,6 +416,14 @@ export function drawPara(p: Element, ox: number, oy: number, areaW: number, ctx:
           const attrs: string[] = [`x="${pt(cx)}"`, `y="${pt(glyphY(st.height) - raise)}"`, `font-size="${pt(fh)}"`]
           if (st.fontFamily) attrs.push(`font-family="${escapeXml(st.fontFamily)}"`)
           if ([...text].length > 1 && sw > 50) {
+            // 빈칸 몫은 빈칸에 — textLength 만 걸면 뷰어가 (한컴 빈칸 폭 − 뷰어 글꼴 빈칸 폭)과 양쪽 정렬 늘임을 모든 글자 사이에 고르게 나눠
+            // 한글 낱말이 "해 석" 처럼 벌어졌다. 빈칸마다 word-spacing 으로 메우고 textLength 엔 글자 폭 오차만 남긴다
+            // ponytail: 뷰어 빈칸 0.3em 가정(함초롬바탕·돋움 실측 0.3, 바탕 0.33·맑은 고딕 0.35) — 다른 글꼴은 남는 오차를 textLength 가 글자 사이에 나눈다
+            const nSp = text.split(" ").length - 1
+            if (nSp > 0) {
+              const ws = (sw - measure(text.replace(/ /g, "")) * scale - (plan.charAdd && i >= plan.fixedTo ? plan.charAdd * [...text].filter(ch => ch !== " ").length : 0)) / nSp - fh * 0.3
+              if (Math.abs(ws) >= 1) attrs.push(`word-spacing="${pt(ws)}"`)
+            }
             attrs.push(`textLength="${pt(sw)}"`, `lengthAdjust="${scale < 1 ? "spacingAndGlyphs" : "spacing"}"`)
           }
           if (st.bold) attrs.push(`font-weight="bold"`)
@@ -662,27 +670,20 @@ function drawObject(o: ParaObj, x: number, y: number, baseV: number, areaW: numb
       drawObject(sub, x + num(off, "x"), y + num(off, "y"), baseV, areaW, ctx, depth + 1)
     }
   } else if (o.tag === "equation") {
-    // 수식 — 수식 조판 대신 스크립트를 한 줄 유니코드 글(a/b·√·첨자)로 상자 폭에 맞춰 그린다. 기준선 = 상자 위 + 높이 × baseLine%
+    // 수식 — 상자 크기를 잰 구조 해석 그대로 조판해 그린다(equation-layout). 기준선 = 상자 위 + 높이 × baseLine%
     const script = findChildByLocalName(o.el, "script")?.textContent ?? ""
-    const latex = script ? hwpEquationToLatex(script) : ""
+    const color = o.el.getAttribute("textColor")
+    const drawn = equationSvg(script, {
+      x, y, width: o.width, height: o.height, baseLine: Number(o.el.getAttribute("baseLine")), baseUnit: num(o.el, "baseUnit", 1000),
+      color: color && color !== "#000000" ? escapeXml(color) : null,
+    }, pt)
+    const latex = drawn || !script ? "" : hwpEquationToLatex(script)
     const text = latex ? latexToPlain(latex) : ""
-    const frac = text && o.width > 0 && o.height > 0 ? layoutFractions(latex) : null
-    if (frac) {
-      // 분수가 든 수식 — 분자·가로선·분모로 쌓아 상자에 맞춘다(배율은 폭·높이 가운데 작은 쪽, 기준선은 상자의 baseLine)
-      const bl = Number(o.el.getAttribute("baseLine")), size = num(o.el, "baseUnit", 1000)
-      const k = Math.min(o.width / (frac.w * size), o.height / ((frac.a + frac.d) * size)), em = size * Math.max(0.5, Math.min(1.5, k))
-      const by = y + Math.round(o.height * (Number.isFinite(bl) && bl > 0 ? bl / 100 : frac.a / (frac.a + frac.d)))
-      const x0 = x + Math.max(0, (o.width - frac.w * em) / 2)
-      const color = o.el.getAttribute("textColor"), fill = color && color !== "#000000" ? escapeXml(color) : null
-      for (const op of frac.ops) {
-        const ox = x0 + op.x * em, oy = by - op.y * em
-        if (op.rule) emit(ctx, `<line x1="${pt(ox)}" y1="${pt(oy)}" x2="${pt(ox + op.rule * em)}" y2="${pt(oy)}" stroke="${fill ?? "#000"}" stroke-width="${pt(em * 0.05)}"/>`)
-        else if (op.text) {
-          emit(ctx, `<text x="${pt(ox)}" y="${pt(oy)}" font-size="${pt(em)}" font-family="'Times New Roman','HCR Batang','Noto Serif KR',serif"${fill ? ` fill="${fill}"` : ""}>${escapeXml(op.text)}</text>`)
-          ctx.stats.texts++
-        }
-      }
+    if (drawn) {
+      emit(ctx, drawn.svg)
+      if (drawn.texts) ctx.stats.texts++
     } else if (text && o.width > 0) {
+      // 구조를 못 읽은 기형 스크립트 — 한 줄 유니코드 글로 상자 폭에 맞춘다
       const bl = Number(o.el.getAttribute("baseLine")), size = num(o.el, "baseUnit", 1000)
       const by = y + Math.round(o.height * (Number.isFinite(bl) && bl > 0 ? bl / 100 : 0.85))
       const color = o.el.getAttribute("textColor")

@@ -1,82 +1,91 @@
 /**
- * 분수가 든 수식의 쌓은 배치 — 맨 바깥 `\frac{a}{b}` 를 분자·가로선·분모로 놓고, 그 앞뒤 글과 분자·분모 안쪽은 한 줄 유니코드 글(latexToPlain)로 둔다.
- * 종전엔 수식 전체를 한 줄 글("9/2")로 상자 폭에 맞춰 눌러 그려 분수가 작은 빗금 글이 됐다.
- * 높이는 한글 저장 수식 실측과 같다(equation-metrics: 분자 위 1.52em, 분모 아래 0.78em, 단순 식 0.86/0.14em).
- * 행(#·행렬·경우)이 든 수식은 null — 호출 측이 종전 한 줄 글로 그린다.
+ * 수식 개체 → SVG 조각. 생성기가 상자 크기(hp:sz)를 재는 구조 해석(equation-metrics measureEquation)이 낸 조각을 그린다 —
+ * 분수는 안쪽까지 분자·가로선·분모로 쌓고, 첨자는 올리고 내리며, ∑·lim 끝은 위아래로, LEFT/RIGHT 괄호는 사이 높이로 늘이고,
+ * 근호는 꺾은선으로, 행렬·경우는 행을 쌓는다. 변수는 기울임, 숫자·기호·함수 이름은 바로 선 글자.
+ * 종전엔 수식 전체를 한 줄 유니코드 글(a/b, a_n)로 상자 폭에 눌러 그려 PDF·미리보기에서 수식이 깨졌다.
  */
 
+import { measureEquation, type EquationOp, type GlyphClass } from "../hwpx/equation-metrics.js"
+import { hwpEquationToLatex } from "../hwp5/equation.js"
 import { latexToPlain } from "./equation-text.js"
 
-/** 그릴 조각 — 글(text)은 기준선 기준 높이 y(위가 +), 가로선(rule)은 폭. 단위 em */
-export interface EquationOp { x: number; y: number; text?: string; rule?: number }
-export interface EquationLayout { w: number; a: number; d: number; ops: EquationOp[] }
+const MATH_FONT = "'Times New Roman','Cambria Math','STIX Two Math',serif"
+const TEXT_FONT = "'HCR Batang','함초롬바탕','Noto Serif KR','Batang',serif"
 
-/** em 폭 — equation-metrics 의 글자 폭과 같은 표 */
-function textWidth(s: string): number {
-  let w = 0
-  for (const c of s) {
-    if (/[0-9]/.test(c)) w += 0.5
-    else if (/[a-z]/.test(c)) w += 0.55
-    else if (/[A-Z]/.test(c)) w += 0.68
-    else if (/[가-힣]/.test(c)) w += 1
-    else if (/[+\-−]/.test(c)) w += 0.85
-    else if (/[=<>≤≥≠]/.test(c)) w += 0.95
-    else if (/[()[\]|]/.test(c)) w += 0.38
-    else if (/[,.:;'′]/.test(c)) w += 0.32
-    else if (c === " ") w += 0.25
-    else if (/[̀-ͯ⃐-⃿]/.test(c)) w += 0
-    else w += 0.8
+/** LaTeX 경로가 유니코드로 못 바꾸는 이름 — 그대로 두면 "ast"·"bot" 같은 글자가 그려진다 */
+const GLYPHS: Record<string, string> = {
+  AST: "*", leq: "≤", le: "≤", geq: "≥", ge: "≥", cdots: "⋯", BOT: "⊥", bot: "⊥", PROPTO: "∝", DEG: "°",
+  dint: "∬", tint: "∭", inter: "⋂", union: "⋃", coprod: "∐",
+}
+const glyphCache = new Map<string, string>(Object.entries(GLYPHS))
+/** 스크립트 토큰 → 그릴 글자. 한 글자는 그대로(빼기는 − ), 이름 토큰(GEQ·alpha·sum…)은 LaTeX 를 거쳐 유니코드로 */
+function glyphOf(tok: string, cls: GlyphClass): string {
+  if (cls === "text" || cls === "var" || cls === "num") return tok
+  if (tok === "-") return "−"
+  if (tok.length === 1) return tok
+  let g = glyphCache.get(tok)
+  if (g === undefined) {
+    g = latexToPlain(hwpEquationToLatex(tok)).trim() || tok
+    glyphCache.set(tok, g)
   }
-  return w
+  return g
 }
 
-/** i 에서 시작하는 인자(중괄호 묶음 또는 명령·글자 하나)의 [안쪽, 끝] */
-function argAt(s: string, i: number): [string, number] {
-  while (s[i] === " ") i++
-  if (s[i] === "{") {
-    for (let d = 0, k = i; k < s.length; k++) {
-      if (s[k] === "\\") { k++; continue }
-      if (s[k] === "{") d++
-      else if (s[k] === "}" && --d === 0) return [s.slice(i + 1, k), k + 1]
-    }
-    return [s.slice(i + 1), s.length]
-  }
-  if (s[i] === "\\") { let k = i + 1; while (/[A-Za-z]/.test(s[k] ?? "")) k++; return [s.slice(i, Math.max(k, i + 2)), Math.max(k, i + 2)] }
-  return [s[i] ?? "", i + 1]
+const f = (n: number): string => String(Math.round(n * 100) / 100)
+const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+
+export interface EquationBoxGeom {
+  /** 상자 왼쪽 위(HWPUNIT 계 좌표 — 호출 측 pt() 로 바꾸기 전 값) */
+  x: number
+  y: number
+  width: number
+  height: number
+  /** 기준선 위치 — 높이 % (hp:equation baseLine) */
+  baseLine: number
+  /** 수식 글자 크기 HWPUNIT (hp:equation baseUnit) */
+  baseUnit: number
+  /** 글자색 — 검정이면 null */
+  color: string | null
 }
 
-export function layoutFractions(latex: string): EquationLayout | null {
-  if (/\\\\|\\begin\{/.test(latex)) return null
-  const ops: EquationOp[] = []
-  let x = 0, a = 0.86, d = 0.14, depth = 0, plain = "", found = false
-  const flush = () => {
-    const t = latexToPlain(plain)
-    plain = ""
-    if (!t) return
-    ops.push({ x, y: 0, text: t })
-    x += textWidth(t)
-  }
-  for (let i = 0; i < latex.length;) {
-    if (depth === 0 && latex.startsWith("\\frac", i) && !/[A-Za-z]/.test(latex[i + 5] ?? "")) {
-      flush()
-      const [num, j] = argAt(latex, i + 5), [den, k] = argAt(latex, j)
-      const n = latexToPlain(num), m = latexToPlain(den), nw = textWidth(n), mw = textWidth(m), w = Math.max(nw, mw) + 0.25
-      // 분자 기준선 0.66em·분모 기준선 −0.64em, 가로선은 그 사이 0.37em
-      ops.push({ x: x + (w - nw) / 2, y: 0.66, text: n }, { x: x + (w - mw) / 2, y: -0.64, text: m }, { x: x + 0.06, y: 0.37, rule: w - 0.12 })
-      x += w
-      a = Math.max(a, 1.52)
-      d = Math.max(d, 0.78)
-      found = true
-      i = k
-      continue
+/**
+ * 수식 상자에 그릴 SVG 조각. pt 는 호출 측 좌표 변환(HWPUNIT → 출력 단위). 그릴 조각이 없으면(기형 입력) null — 호출 측이 한 줄 글로.
+ * 크기는 상자 폭·높이에 맞춘다(배율은 둘 가운데 작은 쪽, 글자 크기의 0.5~1.5 배) — 생성 상자는 같은 해석으로 쟀으니 배율이 1 에 가깝다.
+ */
+export function equationSvg(script: string, g: EquationBoxGeom, pt: (n: number) => string): { svg: string; texts: number } | null {
+  if (!script.trim() || g.width <= 0 || g.height <= 0) return null
+  const lay = measureEquation(script, g.baseUnit)
+  if (!lay.ops.length || lay.w <= 0) return null
+  const k = Math.min(g.width / (lay.w * g.baseUnit), g.height / ((lay.a + lay.d) * g.baseUnit))
+  const em = g.baseUnit * Math.max(0.5, Math.min(1.5, k))
+  const bl = Number.isFinite(g.baseLine) && g.baseLine > 0 ? g.baseLine / 100 : lay.a / (lay.a + lay.d)
+  const by = g.y + g.height * bl
+  const x0 = g.x + Math.max(0, (g.width - lay.w * em) / 2)
+  const ink = g.color ?? "#000"
+  const out: string[] = []
+  let texts = 0
+  const strokeW = (size: number) => pt(Math.max(em * 0.05 * size, 8))
+  for (const o of lay.ops as EquationOp[]) {
+    if (o.k === "r") {
+      out.push(`<line x1="${pt(x0 + o.x * em)}" y1="${pt(by - o.y * em)}" x2="${pt(x0 + (o.x + o.w) * em)}" y2="${pt(by - o.y * em)}" stroke="${ink}" stroke-width="${strokeW(o.size)}"/>`)
+    } else if (o.k === "p") {
+      const pts = o.pts.map(([px, py]) => `${pt(x0 + px * em)},${pt(by - py * em)}`).join(" ")
+      out.push(`<polyline points="${pts}" fill="none" stroke="${ink}" stroke-width="${strokeW(o.size)}" stroke-linejoin="round"/>`)
+    } else {
+      const text = glyphOf(o.tok, o.cls)
+      if (!text) continue
+      const cx = x0 + (o.x + o.w / 2) * em, cy = by - o.y * em, fs = em * o.size
+      const font = o.cls === "text" ? TEXT_FONT : MATH_FONT
+      const style = o.cls === "var" ? ` font-style="italic"` : ""
+      const fill = g.color ? ` fill="${g.color}"` : ""
+      if (o.sy && o.sy !== 1) {
+        // 늘인 괄호 — 기준선에서 세로로만 늘린다
+        out.push(`<text x="0" y="0" transform="translate(${pt(cx)} ${pt(cy)}) scale(1 ${f(o.sy)})" text-anchor="middle" font-size="${pt(fs)}" font-family="${font}"${fill}>${esc(text)}</text>`)
+      } else {
+        out.push(`<text x="${pt(cx)}" y="${pt(cy)}" text-anchor="middle" font-size="${pt(fs)}" font-family="${font}"${style}${fill}>${esc(text)}</text>`)
+      }
+      texts++
     }
-    const c = latex[i]
-    if (c === "\\") { plain += latex.slice(i, i + 2); i += 2; continue }
-    if (c === "{") depth++
-    else if (c === "}") depth--
-    plain += c
-    i++
   }
-  flush()
-  return found ? { w: x, a, d, ops } : null
+  return { svg: out.join(""), texts }
 }
