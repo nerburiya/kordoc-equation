@@ -554,3 +554,19 @@ describe("한글 수식 편집기 호환 — 구문 깨짐·상자 크기·글�
     assert.ok(want && Math.abs(+m[4] - want) <= want * 0.02, `분수 높이 ${m[4]} vs 한글 ${want} (${height})`)
   })
 })
+
+describe("수식 상자 높이 — 위첨자 (한글 실측)", () => {
+  it("LEFT … RIGHT 는 한 덩어리 — 뒤 위첨자가 늘인 괄호 높이에 붙는다", async () => {
+    const { equationBox } = await import("../src/hwpx/equation-metrics.js")
+    // 한글 10pt 실측: 높이 2417 · 기준선 68% (종전 2243 — 위첨자를 늘기 전 괄호에 달았다)
+    const b = equationBox("LEFT ( {5} over {6} RIGHT ) ^{n-5}", 1000)
+    assert.ok(Math.abs(b.height - 2417) <= 2417 * 0.02, `높이 ${b.height}`)
+  })
+  it("보통 글자 위 첨자 — 9·10·12·15pt 실측 높이 ±2%", async () => {
+    const { equationBox } = await import("../src/hwpx/equation-metrics.js")
+    for (const [unit, want] of [[900, 1050], [1000, 1163], [1200, 1425], [1500, 1800]]) {
+      const h = equationBox("a ^{2}", unit).height
+      assert.ok(Math.abs(h - want) <= want * 0.02, `${unit}: ${h} vs ${want}`)
+    }
+  })
+})

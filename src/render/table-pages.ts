@@ -145,6 +145,9 @@ export function planTableRows(tbl: Element, cells: CellModel[], rowH: number[], 
   const nRows = rowH.length
   const rowY = [0]
   for (const h of rowH) rowY.push(rowY[rowY.length - 1] + h)
+  // 아래 여백 넘침 여유는 본문 높이보다 큰 표만(어느 쪽에서도 본문에 안 드는 서식 표) — 본문에 드는 표가 바닥을 넘으면 넘친 행을 다음 쪽으로
+  // (한컴 PDF: 쪽 645pt 에서 시작한 5행 표(127pt)의 마지막 행이 본문 바닥 771pt 를 1pt 넘어 3쪽 맨 위. 여유를 주면 2쪽 아래 여백에 그렸다)
+  if (rowY[nRows] <= BODY_H) slack = 0
   const plain = (): RowPiece[][] => rowH.map((h, r) => [{ page: 0, y: ty + rowY[r], h }])
   const pageBottom = MT + BODY_H
   // 첫 쪽에서 표 전체가 아래 여백 안에서 끝나면 가르지 않는다(한컴 PDF: 쪽보다 조금 큰 서식 표 하나짜리 문서가 1쪽)

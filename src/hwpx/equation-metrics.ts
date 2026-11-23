@@ -197,7 +197,7 @@ export function measureEquation(script: string, unit = 1200): EquationLayout {
 
   const seq = (stop?: string): Box => {
     const items: Array<Box | null> = []
-    while (i < t.length && t[i] !== stop) {
+    while (i < t.length && t[i] !== stop && !(stop === "RIGHT" && t[i] === "right")) {
       if (t[i] === "over") {
         i++
         // 분자는 바로 앞 항목 하나(한글 편집기·읽기 경로 elemStart 와 같은 결합) — 앞 전체를 묶으면 "a= {1} over {2} + {3} over {4}" 의 분수가 겹겹이 쌓여 높이가 3배가 됐다
@@ -237,13 +237,22 @@ export function measureEquation(script: string, unit = 1200): EquationLayout {
     // ponytail: 글꼴 지시(rm·it·bold)는 폭만 0 — 그릴 때 글꼴을 바꾸지 않는다
     if (ZERO_WIDTH.has(x)) return ATOM(0)
     // 늘이는 괄호 — 다음 토큰이 괄호 글자("{" 도 묶음이 아니라 글자). 실측 ( ) 0.375em, { } | 0.5em, "." 은 안 보이는 쪽
-    if (x === "LEFT" || x === "RIGHT" || x === "left" || x === "right") {
+    const delimAtom = (side: "L" | "R"): Box => {
       const d = t[i++] ?? "."
       const w = d === "." ? 0 : d === "(" || d === ")" ? 0.375 : 0.5
       const b = ATOM(w, d === "." ? [] : [{ k: "t", x: 0, y: 0, w, size: 1, tok: d, cls: "delim" }])
-      b.delim = x.toUpperCase() === "LEFT" ? "L" : "R"
+      b.delim = side
       return b
     }
+    // LEFT … RIGHT 는 한 덩어리 — 뒤 첨자·over 가 덩어리 전체에 붙는다(한글 수식 편집기). 종전엔 RIGHT 괄호 글자 하나에 붙어
+    // "LEFT ( {5} over {6} RIGHT ) ^{n-5}" 의 위첨자를 늘기 전 괄호(0.86em) 높이에 달아 상자 위를 1.6pt 낮게 잡았다
+    if (x === "LEFT" || x === "left") {
+      const L = delimAtom("L"), inner = seq("RIGHT")
+      if (t[i] !== "RIGHT" && t[i] !== "right") return combine([L, inner])
+      i++
+      return combine([L, inner, delimAtom("R")])
+    }
+    if (x === "RIGHT" || x === "right") return delimAtom("R")
     if (x === "lim" || x === "Lim") return { w: 1.812, a: 0.95, d: 0.237, ops: [{ k: "t", x: 0, y: 0, w: 1.812, size: 1, tok: "lim", cls: "fn" }] }
     if (x === "sqrt") return radical(base() ?? ATOM(0.5), null)
     if (x === "root") {
@@ -325,7 +334,10 @@ export function measureEquation(script: string, unit = 1200): EquationLayout {
     }
     // 위·아래 첨자를 함께 달면 폭은 넓은 쪽만
     let a = b.a, d = b.d
-    if (sup) { const top = b.a * 0.45 + hs(sup); a = Math.max(a, top); ops.push(...moveOps(sup.ops, b.w, top - sup.a * S, S)) }
+    // 위첨자 기준선: 보통 글자는 0.45·바탕 높이 근처, 키 큰 바탕(괄호 친 분수)은 바탕 위 끝 − 0.4em
+    // (한글 실측: LEFT ( {5} over {6} RIGHT ) ^{n-5} 위 1.644em — 종전 식은 바탕 1.52em 아래라 첨자 몫을 0 으로 잡았다)
+    // 보통 글자 위 첨자는 9·10·11·12·15pt 실측(a^2 − a: 150·188·188·225·300)이 종전 식보다 0.04em 높다
+    if (sup) { const top = Math.max(b.a * 0.45 + hs(sup) + 0.043, b.a - 0.4 + sup.a * S); a = Math.max(a, top); ops.push(...moveOps(sup.ops, b.w, top - sup.a * S, S)) }
     if (sub) { const bot = hs(sub) - 0.27; d = Math.max(d, bot); ops.push(...moveOps(sub.ops, b.w, -bot + sub.d * S, S)) }
     return { w: b.w + Math.max(ws(sup), ws(sub)), a, d, ops }
   }

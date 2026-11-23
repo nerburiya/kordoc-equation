@@ -14,9 +14,9 @@ describe("render: 아래 여백 안에서 끝나는 표와 쪽에서 갈라 저�
   it("칸 줄이 되돌아간 표는 아래 여백으로 넘치지 않고 가른다 — 되돌아가지 않은 표는 종전대로 한 쪽", async () => {
     const { planTableRows } = await import("../src/render/table-pages.js")
     const { collectCells, measureTableRowHeights } = await import("../src/render/para-model.js")
-    // 쪽 본문 0~6000, 아래 여백 넘침 여유 5000. 표 위 3000 — 두 표 모두 여유(11000) 안에서 끝난다(갈린 칸은 이어 잰 내용 7400)
+    // 쪽 본문 0~5000(두 표 모두 본문보다 커 넘침 여유를 받는다), 아래 여백 넘침 여유 6000. 표 위 3000 — 두 표 모두 여유(11000) 안에서 끝난다(갈린 칸은 이어 잰 내용 7400)
     const split = table([0, 1600, 3200, 0, 1600]), flat = table([0, 1600, 3200, 4800])
-    const pages = (t: Element) => new Set(planTableRows(t, collectCells(t), measureTableRowHeights(t), 3000, 0, 6000, 5000).flat().map(p => p.page)).size
+    const pages = (t: Element) => new Set(planTableRows(t, collectCells(t), measureTableRowHeights(t), 3000, 0, 5000, 6000).flat().map(p => p.page)).size
     assert.equal(pages(flat), 1)
     assert.equal(pages(split), 2)
   })
