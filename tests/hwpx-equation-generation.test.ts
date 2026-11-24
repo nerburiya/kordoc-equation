@@ -574,6 +574,22 @@ describe("수식 상자 높이 — 위첨자 (한글 실측)", () => {
     const b = equationBox("LEFT ( {5} over {6} RIGHT ) ^{n-5}", 1000)
     assert.ok(Math.abs(b.height - 2417) <= 2417 * 0.02, `높이 ${b.height}`)
   })
+  it("상자 폭 — 이웃 간격(이항·관계·쉼표·괄호)·첨자 크기·분수 여백, 9·10·12pt 한글 재계산 실측과 같다", async () => {
+    const { equationBox } = await import("../src/hwpx/equation-metrics.js")
+    const cases: Array<[string, number, number, number]> = [
+      ["1,1,1,1", 2664, 3210, 3552], ["[0,1]", 1701, 2090, 2268], ["-1", 1251, 1490, 1668], ["a=a", 1953, 2295, 2604],
+      ["a<b", 1953, 2295, 2679], ["a LEQ a", 2178, 2520, 2904], ["a TIMES b", 1827, 2080, 2436], ["1+2+ CDOTS +6", 4779, 5660, 6372],
+      ["f(x)=1", 3354, 3860, 4422], ["E _{n}", 975, 1200, 1275], ["a ^{2} (b)", 2028, 2270, 2604], ["(E _{n} -6)", 3219, 3710, 4167],
+      ["a ^{AST}", 1050, 1275, 1350], ["{1} over {2} = {1} over {2}", 2664, 3085, 3552], ["6- {47} over {54}", 2727, 3180, 3636],
+      ["LEFT ( {5} over {6} RIGHT )", 1650, 1775, 2100], ['"또는 "', 1912, 2225, 2550], ["a ~ b", 1275, 1475, 1725],
+    ]
+    for (const [s, ...want] of cases) {
+      [900, 1000, 1200].forEach((unit, k) => {
+        const w = equationBox(s, unit).width
+        assert.ok(Math.abs(w - want[k]) <= 2, `${s} @${unit}: ${w} vs 한글 ${want[k]}`)
+      })
+    }
+  })
   it("보통 글자 위 첨자 — 9·10·12·15pt 실측 높이 ±2%", async () => {
     const { equationBox } = await import("../src/hwpx/equation-metrics.js")
     for (const [unit, want] of [[900, 1050], [1000, 1163], [1200, 1425], [1500, 1800]]) {
