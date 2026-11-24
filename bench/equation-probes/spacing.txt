@@ -1,0 +1,71 @@
+(a)b
+a(b
+(a)
+a)
+(a
+a,
+,a
++a
+a+
+a=
+=a
+a _{1} b
+a _{1} +b
+a _{1} ,b
+a _{1} =b
+a ^{2} =b
+a ^{2} b
+a ^{2} +b
+a ^{2} (b)
+(a) ^{2}
+(a) ^{2} =b
+(a+b)
+[a]b
+a[b]
+a TIMES b
+a CDOT b
+a CDOTS b
+a/b
+a:b
+a>b
+a<b
+<
+>
+LEQ
+CDOTS
+TIMES
+CDOT
+max (a)
+sin x
+sin (x)
+2(a)
+2a
+{1} over {2}
+a {1} over {2}
+a+ {1} over {2}
+a= {1} over {2}
+{1} over {2} a
+{1} over {2} +a
+{1} over {2} = {1} over {2}
+sum a
+a sum a
+sum _{k=1} ^{6} a
+a= sum _{k=1} ^{6} a
+int a
+a= int _{0} ^{1} a
+max
+max a
+max (k,a)
+1+2+ CDOTS +6
+E _{n} -6
+(E _{n} -6)
+6- {47} over {54}
+{5} over {6} E _{n}
+LEFT ( a RIGHT )
+LEFT ( {5} over {6} RIGHT )
+a LEFT ( a RIGHT )
+"또는 "
+"가"
+a "가"
+a ` b
+a ~ b

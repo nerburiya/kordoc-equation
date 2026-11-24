@@ -1,0 +1,26 @@
+int
+int a
+int _{0} ^{1} a
+int _{0} a
+int ^{1} a
+int _{0} ^{a ^{AST}} a
+int _{a} ^{1-a} a
+sum
+sum a
+sum _{k=1} ^{6} a
+sum _{k=1} a
+sum ^{6} a
+sum _{k=1} ^{n} k
+prod a
+lim
+lim a
+lim _{n -> inf} a
+a
+a ^{2}
+{1} over {2}
+D'
+D''
+f'(x)
+a'
+max
+LDOTS
