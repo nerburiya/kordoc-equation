@@ -41,7 +41,7 @@ const SYMBOLS: Record<string, number> = {
   GEQ: 1, LEQ: 1, geq: 1, leq: 1, ge: 1, le: 1, SUBSET: 1, CDOTS: 1, cdots: 1, VDOTS: 1.42, LDOTS: .812,
   APPROX: .86, "!=": .86, AST: 1, SIM: .86, CIRC: 1, "==": .86, "-+": 1,
   TIMES: .8, times: .8, "+-": .8, DIVIDE: .8, "÷": .8,
-  cdot: 1, CDOT: 1, "->": 1, rarrow: 1, RARROW: 1, larrow: 1, LARROW: 1, LRARROW: 1, "<->": 1, INF: 1, IN: 1, CUP: 1, SMALLINTER: 1,
+  cdot: 1, CDOT: 1, "->": 1, rarrow: 1, RARROW: 1, larrow: 1, LARROW: 1, LRARROW: 1, "<->": 1, INF: 1, inf: 1, IN: 1, CUP: 1, SMALLINTER: 1,
   FORALL: 1, EXIST: 1, NABLA: 1, ANGLE: 1, angle: 1, TRIANGLE: 1, triangle: 1, BOT: 1, bot: 1, PROPTO: 1,
   THEREFORE: 1, therefore: 1, BECAUSE: 1, because: 1, DEG: .5, PVER: .938, prime: .312, Partial: .5,
 }
@@ -131,6 +131,29 @@ interface Box extends EquationLayout { delim?: "L" | "R"; cls?: SpaceClass; scri
 const ATOM = (w: number, ops: EquationOp[] = []): Box => ({ w, a: 0.86, d: 0.14, ops })
 const SCRIPT_SCALE = 0.62
 
+/**
+ * 큰 연산자 글자 상자(HWPUNIT) — 한글 재계산 실측 8·9·10·11·12·13·14·15·16·18·20pt, 사이 크기는 선형 보간.
+ * 크기마다 반올림이 따로 놀아(10pt ∫ 1260 인데 9pt 1179·11pt 1416) 한 비율로 안 맞는다 — 실측 표로 둔다.
+ * a: 기준선 위 몫(실측 ∫ 66%·∑ 76%·lim 80%, 크기와 무관)
+ */
+const BIG_UNITS = [800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1800, 2000]
+const SUM_H = [1069, 1238, 1350, 1463, 1631, 1744, 1913, 2025, 2138, 2419, 2700]
+const BIG_GLYPHS: Record<string, { w: number[]; h: number[]; a: number }> = {
+  int: { w: [1098, 1179, 1260, 1416, 1572, 1653, 1809, 1965, 2046, 2358, 2595], h: [1484, 1698, 1911, 2050, 2264, 2477, 2616, 2830, 3043, 3396, 3748], a: 0.66 },
+  sum: { w: [1050, 1200, 1275, 1425, 1500, 1725, 1875, 1950, 2025, 2400, 2625], h: SUM_H, a: 0.76 },
+  prod: { w: [1125, 1275, 1350, 1500, 1575, 1800, 1950, 2025, 2175, 2475, 2700], h: SUM_H, a: 0.76 },
+  lim: { w: [1200, 1500, 1725, 1875, 2175, 2175, 2250, 2550, 2850, 2925, 3375], h: [974, 1050, 1200, 1350, 1424, 1574, 1650, 1800, 1950, 2174, 2400], a: 0.8 },
+}
+/** 표 값 보간 — 범위 밖은 가까운 끝 값을 크기 비례로 */
+function bigAt(v: number[], size: number): number {
+  const n = BIG_UNITS.length
+  if (size <= BIG_UNITS[0]) return (v[0] * size) / BIG_UNITS[0]
+  if (size >= BIG_UNITS[n - 1]) return (v[n - 1] * size) / BIG_UNITS[n - 1]
+  const k = BIG_UNITS.findIndex((u) => u >= size)
+  const [u0, u1] = [BIG_UNITS[k - 1], BIG_UNITS[k]]
+  return v[k - 1] + ((v[k] - v[k - 1]) * (size - u0)) / (u1 - u0)
+}
+
 /** 조각들을 (dx, dy) 로 옮기고 s 배 — 첨자는 0.62 배로 줄여 붙인다 */
 function moveOps(ops: EquationOp[], dx: number, dy: number, s = 1): EquationOp[] {
   return ops.map((o): EquationOp => o.k === "p"
@@ -153,9 +176,11 @@ function charClass(c: string): GlyphClass {
  * 스크립트 → em 상자 (폭·기준선 위·아래)와 그릴 조각. unit 은 수식 글자 크기(baseUnit, HWPUNIT) — 글자 폭 반올림에 쓴다.
  * 생성기는 상자 크기(hp:sz)를, 렌더러는 같은 해석의 조각을 쓴다 — 둘이 어긋나지 않게 한 곳에서 낸다.
  */
-export function measureEquation(script: string, unit = 1200, sp = 1): EquationLayout {
-  // sp: 실제 글자 크기 1em 이 unit 기준 몇 em 인가 — 간격·빈칸·분수 여백은 격자에 맞추지 않은 실제 크기로 잰다(equationBox 가 넘긴다)
-  let cur = unit, scriptDepth = 0
+export function measureEquation(script: string, unit = 1200, real = unit, hUnit = unit): EquationLayout {
+  // cur: 글자 폭을 반올림하는 크기(격자), rs: 실제 글자 크기 — 간격·빈칸·분수 여백·큰 연산자는 실제 크기로 잰다.
+  // real·hUnit 은 equationBox 가 넘긴다(맨 바깥 실제 크기, 높이 격자 크기). 렌더러는 셋 다 unit
+  let cur = unit, rs = real
+  const sp = (): number => rs / cur
   const q = (em: number): number => (Math.round((em * cur) / GLYPH_GRID) * GLYPH_GRID) / cur
   // 중괄호 폭탄 같은 기형 입력은 구조를 재지 않고 글자 폭 합으로 (재귀 깊이 상한, 조각 없음 — 렌더러는 한 줄 글로)
   let depth = 0, deepest = 0
@@ -176,7 +201,7 @@ export function measureEquation(script: string, unit = 1200, sp = 1): EquationLa
     const ops: EquationOp[] = []
     let w = 0
     for (const c of quoted ? [...x.slice(1, -1)] : [...x]) {
-      const space = SPACE_CHARS.has(c), cw = space ? charWidth(c) * sp : q(charWidth(c))
+      const space = SPACE_CHARS.has(c), cw = space ? charWidth(c) * sp() : q(charWidth(c))
       if (!space) ops.push({ k: "t", x: w, y: 0, w: cw, size: 1, tok: c, cls: quoted ? "text" : charClass(c) })
       w += cw
     }
@@ -209,8 +234,8 @@ export function measureEquation(script: string, unit = 1200, sp = 1): EquationLa
     }
     const bs = items as Box[]
     if (!bs.length) return ATOM(0)
-    // 이웃 간격 — 첨자 안은 띄우지 않는다
-    const gaps = bs.map((b, k) => k && !scriptDepth ? gap(bs[k - 1].cls ?? "ord", b.cls ?? "ord") * (bs[k - 1].scripted ? 10 / 7 : 1) * sp : 0)
+    // 이웃 간격 — 첨자 안도 첨자 실제 크기(2/3)로 띄운다(∑ 아래 k=1 실측)
+    const gaps = bs.map((b, k) => k ? gap(bs[k - 1].cls ?? "ord", b.cls ?? "ord") * (bs[k - 1].scripted ? 10 / 7 : 1) * sp() : 0)
     // LEFT … RIGHT 짝마다 사이 높이로 괄호를 늘인다. 짝 없는 쪽은 줄 전체 높이로
     const open: number[] = []
     const span = (from: number, to: number): [number, number] => {
@@ -242,7 +267,7 @@ export function measureEquation(script: string, unit = 1200, sp = 1): EquationLa
         // 분자는 바로 앞 항목 하나(한글 편집기·읽기 경로 elemStart 와 같은 결합) — 앞 전체를 묶으면 "a= {1} over {2} + {3} over {4}" 의 분수가 겹겹이 쌓여 높이가 3배가 됐다
         const num = items.length && items[items.length - 1] ? items.pop()! : ATOM(0.5), den = elem() ?? ATOM(0.5)
         // 분자 밑 0.52em·분모 위 0.22em, 분수선은 그 사이 0.37em(수식 축)
-        const w = Math.max(num.w, den.w) + 0.5 * sp
+        const w = Math.max(num.w, den.w) + 0.5 * sp()
         items.push({
           w, cls: "inner", a: num.a + num.d + 0.52, d: den.a + den.d - 0.22,
           ops: [...moveOps(num.ops, (w - num.w) / 2, num.d + 0.52), ...moveOps(den.ops, (w - den.w) / 2, 0.22 - den.a), { k: "r", x: 0.12, y: 0.37, w: w - 0.24, size: 1 }],
@@ -292,7 +317,12 @@ export function measureEquation(script: string, unit = 1200, sp = 1): EquationLa
       return { ...combine([L, inner, delimAtom("R")]), cls: "inner" }
     }
     if (x === "RIGHT" || x === "right") return delimAtom("R")
-    if (x === "lim" || x === "Lim") return { w: 1.812, a: 0.95, d: 0.237, ops: [{ k: "t", x: 0, y: 0, w: 1.812, size: 1, tok: "lim", cls: "fn" }] }
+    // 큰 연산자 글자 상자 — 실측 표(폭은 cur, 높이는 높이 격자 em 으로)
+    const bigBox = (key: string): { w: number; a: number; d: number } => {
+      const g = BIG_GLYPHS[key], h = bigAt(g.h, rs) / (hUnit * rs / real)
+      return { w: bigAt(g.w, rs) / cur, a: h * g.a, d: h * (1 - g.a) }
+    }
+    if (x === "lim" || x === "Lim") { const g = bigBox("lim"); return { ...g, ops: [{ k: "t", x: 0, y: 0, w: g.w, size: 1, tok: "lim", cls: "fn" }] } }
     if (x === "sqrt") return radical(base() ?? ATOM(0.5), null)
     if (x === "root") {
       const n = base()
@@ -330,12 +360,12 @@ export function measureEquation(script: string, unit = 1200, sp = 1): EquationLa
     // 큰 연산자 실측: ∫ 1.31em·높이 1.887·기준선 66%, ∑ 1.25em·1.359·76%. 글자는 수식 축(0.25em)에 가운데로 키워 그린다
     if (x === "int" || x === "oint" || x === "dint" || x === "tint") {
       // 적분 기호는 상자 높이(1.887em)로 세로로 늘인다 — 키운 글자는 폭까지 커져 옆 첨자와 겹친다
-      const b: Box = { w: wordWidth(x, q), a: 1.245, d: 0.642, ops: [] }
+      const b: Box = { ...bigBox("int"), ops: [] }
       b.ops.push({ k: "t", x: 0, y: 0, w: b.w, size: 1, tok: x, cls: "big" })
       stretch(b, b.a, b.d)
       return b
     }
-    if (BIG_OPS.has(x)) return { w: 1.25, a: 1.033, d: 0.326, ops: [{ k: "t", x: 0, y: -0.22, w: 1.25, size: 1.3, tok: x, cls: "big" }] }
+    if (BIG_OPS.has(x)) { const g = bigBox(x === "prod" || x === "coprod" ? "prod" : "sum"); return { ...g, ops: [{ k: "t", x: 0, y: -0.22, w: g.w, size: 1.3, tok: x, cls: "big" }] } }
     return word(x)
   }
 
@@ -349,23 +379,22 @@ export function measureEquation(script: string, unit = 1200, sp = 1): EquationLa
     while (t[i] === "^" || t[i] === "_") {
       const isSup = t[i] === "^"
       i++
-      // 첨자 글자 폭은 2/3 크기를 1.5pt 격자로 반올림한 크기에서 잰다(9pt 600·10·12pt 750·15pt 1050 — 첨자 AST 가 꼭 1em).
-      // ∑·∫ 끝은 종전 0.62 배(그 실측에 맞춘 값 — 큰 연산자는 10pt 따로 놀아 아직 규칙을 모른다)
-      const outer = cur
-      cur = BIG_OPS.has(head) || UNDER_OVER.has(head) ? outer * SCRIPT_SCALE
-        : Math.max(2 * GLYPH_GRID, Math.round((outer * 2) / 3 / (2 * GLYPH_GRID)) * 2 * GLYPH_GRID)
-      scriptDepth++
+      // 첨자 글자 폭은 실제 크기 × 0.68 을 1.5pt 격자로 반올림한 크기에서 잰다(8~20pt 11개 크기 실측: 8·9pt 600·10~12pt 750·13·14pt 900 …
+      // — 첨자 AST 가 꼭 1em). 간격은 실제 크기 2/3 로
+      const outer = cur, outerReal = rs
+      cur = Math.max(2 * GLYPH_GRID, Math.round((outerReal * 0.68) / (2 * GLYPH_GRID)) * 2 * GLYPH_GRID)
+      rs = (outerReal * 2) / 3
       const s = base() ?? { w: 0, a: 0, d: 0, ops: [] }
-      scriptDepth--
       sw = cur / outer
       cur = outer
+      rs = outerReal
       if (isSup) sup = s; else sub = s
     }
     if (!sup && !sub) return b
     // 높이는 0.62 배(실측), 폭은 첨자 크기 비(sw)
     const S = SCRIPT_SCALE, hs = (s: Box | null) => (s ? (s.a + s.d) * S : 0), ws = (s: Box | null) => (s ? s.w * sw : 0)
     if (UNDER_OVER.has(head)) {
-      const w = Math.max(b.w, ws(sup), ws(sub)) + 0.06
+      const w = Math.max(b.w, ws(sup), ws(sub))
       const ops = moveOps(b.ops, (w - b.w) / 2, 0)
       if (sup) ops.push(...moveOps(sup.ops, (w - ws(sup)) / 2, b.a + 0.07 + sup.d * S, S))
       if (sub) ops.push(...moveOps(sub.ops, (w - ws(sub)) / 2, -(b.d + 0.07 + sub.a * S), S))
@@ -376,7 +405,8 @@ export function measureEquation(script: string, unit = 1200, sp = 1): EquationLa
       const a = b.a + hs(sup) * 0.55, d = b.d + hs(sub) * 0.55
       if (sup) ops.push(...moveOps(sup.ops, b.w, a - sup.a * S, S))
       if (sub) ops.push(...moveOps(sub.ops, b.w - 0.15, -d + sub.d * S, S))
-      return { w: b.w + Math.max(ws(sup), ws(sub)), a, d, ops }
+      // 아래 끝은 기호 밑으로 들어가 폭을 더하지 않는다(실측: int _{0} a 와 int a 폭이 같다)
+      return { w: b.w + ws(sup), a, d, ops }
     }
     // 위·아래 첨자를 함께 달면 폭은 넓은 쪽만
     let a = b.a, d = b.d
@@ -398,6 +428,6 @@ export function measureEquation(script: string, unit = 1200, sp = 1): EquationLa
 export function equationBox(script: string, unit: number): { width: number; height: number; baseline: number } {
   const hUnit = Math.max(GLYPH_GRID, Math.round(unit / GLYPH_GRID) * GLYPH_GRID)
   const wUnit = Math.max(2 * GLYPH_GRID, Math.round(unit / (2 * GLYPH_GRID)) * 2 * GLYPH_GRID)
-  const { w, a, d } = measureEquation(script, wUnit, unit / wUnit)
+  const { w, a, d } = measureEquation(script, wUnit, unit, hUnit)
   return { width: w * wUnit, height: (a + d) * hUnit, baseline: (100 * a) / (a + d) }
 }

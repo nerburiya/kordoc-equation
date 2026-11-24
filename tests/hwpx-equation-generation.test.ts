@@ -590,6 +590,21 @@ describe("수식 상자 높이 — 위첨자 (한글 실측)", () => {
       })
     }
   })
+  it("큰 연산자(∫·∑·lim) — 8~20pt 한글 재계산 실측 폭·높이, ∫ 아래 끝은 폭을 더하지 않는다", async () => {
+    const { equationBox } = await import("../src/hwpx/equation-metrics.js")
+    const cases: Array<[string, number, number, number, number]> = [
+      // script, 크기, 폭, 높이, 기준선
+      ["int a", 1000, 1785, 1911, 66], ["int a", 1100, 1941, 2050, 66], ["int _{0} a", 1000, 1785, 2249, 56],
+      ["int _{0} ^{1} a", 1000, 2160, 2586, 62], ["sum _{k=1} ^{6} a", 1000, 2155, 2700, 63], ["sum _{k=1} ^{6} a", 1200, 2286, 3281, 63],
+      ["lim _{n -> inf} a", 1000, 2475, 1875, 51], ["lim _{n -> inf} a", 1500, 3525, 2850, 51], ["prod a", 1300, 2550, 1744, 76],
+    ]
+    for (const [s, unit, w, h, bl] of cases) {
+      const b = equationBox(s, unit)
+      assert.ok(Math.abs(b.width - w) <= 2, `${s} @${unit} 폭 ${b.width} vs ${w}`)
+      assert.ok(Math.abs(b.height - h) <= h * 0.015, `${s} @${unit} 높이 ${b.height} vs ${h}`)
+      assert.ok(Math.abs(b.baseline - bl) <= 1, `${s} @${unit} 기준선 ${b.baseline} vs ${bl}`)
+    }
+  })
   it("보통 글자 위 첨자 — 9·10·12·15pt 실측 높이 ±2%", async () => {
     const { equationBox } = await import("../src/hwpx/equation-metrics.js")
     for (const [unit, want] of [[900, 1050], [1000, 1163], [1200, 1425], [1500, 1800]]) {
