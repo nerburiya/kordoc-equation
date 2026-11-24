@@ -558,6 +558,7 @@ export type { SealOp, SealPlacement, PlaceSealResult } from "./form/seal.js"
 export { addMemoHwpx } from "./form/memo.js"
 export type { MemoOp, MemoPlacement, AddMemoResult } from "./form/memo.js"
 export { markdownToHwpx } from "./hwpx/generator.js"
+export { fitHwpxEquations } from "./hwpx/equation-generate.js"
 // HWP 5.x → HWPX 서식 그대로 변환
 export { hwpToHwpx, convertToHwpx, type HwpToHwpxOptions, type ConvertToHwpxResult } from "./hwp5/to-hwpx/index.js"
 // HWPX → HWP 5.0 — optional peer dep @rhwp/core 로 저장

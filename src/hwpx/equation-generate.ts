@@ -495,14 +495,42 @@ export function fitEquationsToRunSize(sectionXml: string, headerXml: string): st
   if (!sectionXml.includes("<hp:equation ")) return sectionXml
   const heights = new Map<string, number>()
   for (const m of headerXml.matchAll(/<hh:charPr\b[^>]*?\bid="(\d+)"[^>]*?\bheight="(\d+)"/g)) heights.set(m[1], +m[2])
-  // 비율로 늘리지 않고 그 크기로 다시 잰다 — 한글은 글자 폭을 크기마다 0.75pt 격자로 반올림해 크기에 비례하지 않는다
+  // 비율로 늘리지 않고 그 크기로 다시 잰다 — 한글은 글자 폭을 크기마다 0.75pt 격자로 반올림해 크기에 비례하지 않는다.
+  // 한글이 다시 저장한 파일은 run 을 합쳐 수식이 <hp:t> 뒤에 오고, 표 안 run 이 바깥 run 안에 든다 — run 을 쌓아 가며 감싼 run 을 찾는다.
+  // 크기 값(baseUnit·baseLine·hp:sz)만 바꾸고 나머지 속성·자식은 그대로 둔다.
+  const runs: (string | undefined)[] = []
   return sectionXml.replace(
-    /(<hp:run charPrIDRef="(\d+)"[^>]*>)<hp:equation id="(\d+)" zOrder="(\d+)"[^>]*?baseUnit="(\d+)"[\s\S]*?<hp:script>([\s\S]*?)<\/hp:script><\/hp:equation>/g,
-    (all, run, cid, id, z, bu, script) => {
-      const size = heights.get(cid)
-      if (!size || size === +bu) return all
-      return run + generateEquationXml(unescapeXml(script), +z, +id, size)
+    /<hp:run\b([^>]*?)(\/?)>|<\/hp:run>|<hp:equation\b[^>]*>[\s\S]*?<\/hp:equation>/g,
+    (tok, runAttrs: string | undefined, selfClose: string | undefined) => {
+      if (tok.startsWith("<hp:run")) {
+        if (!selfClose) runs.push(/\bcharPrIDRef="(\d+)"/.exec(runAttrs!)?.[1])
+        return tok
+      }
+      if (tok === "</hp:run>") { runs.pop(); return tok }
+      const size = heights.get(runs[runs.length - 1] ?? "")
+      const bu = /\bbaseUnit="(\d+)"/.exec(tok)?.[1]
+      const script = /<hp:script>([\s\S]*?)<\/hp:script>/.exec(tok)?.[1]
+      if (!size || !bu || size === +bu || script === undefined) return tok
+      const { width, height, baseline } = estimateEquationMetrics(unescapeXml(script), size)
+      return tok
+        .replace(/^(<hp:equation\b[^>]*?\bbaseUnit=")\d+"/, `$1${size}"`)
+        .replace(/^(<hp:equation\b[^>]*?\bbaseLine=")\d+"/, `$1${baseline}"`)
+        .replace(/<hp:sz\b[^>]*>/, (sz) => sz.replace(/\bwidth="\d+"/, `width="${width}"`).replace(/\bheight="\d+"/, `height="${height}"`))
     })
+}
+
+/** 이미 있는 HWPX(옛 생성기 산출물·한글이 다시 저장한 파일)의 수식 상자를 놓인 글자 크기로 다시 잰다 — md 없이 */
+export async function fitHwpxEquations(hwpx: ArrayBuffer | Uint8Array): Promise<ArrayBuffer> {
+  const { default: JSZip } = await import("jszip")
+  const zip = await JSZip.loadAsync(hwpx)
+  const headerXml = await zip.file("Contents/header.xml")?.async("string")
+  if (!headerXml) throw new Error("HWPX 가 아닙니다 — Contents/header.xml 없음")
+  for (const name of Object.keys(zip.files).filter((n) => /^Contents\/section\d+\.xml$/.test(n))) {
+    const xml = await zip.file(name)!.async("string")
+    const fitted = fitEquationsToRunSize(xml, headerXml)
+    if (fitted !== xml) zip.file(name, fitted)
+  }
+  return zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" })
 }
 
 export function generateEquationParagraph(input: string, zOrder: number = 0): string {

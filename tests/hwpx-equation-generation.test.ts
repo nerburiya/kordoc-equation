@@ -553,6 +553,18 @@ describe("한글 수식 편집기 호환 — 구문 깨짐·상자 크기·글�
     const want = ({ 1000: 2250, 1200: 2760 } as Record<number, number>)[height]
     assert.ok(want && Math.abs(+m[4] - want) <= want * 0.02, `분수 높이 ${m[4]} vs 한글 ${want} (${height})`)
   })
+
+  it("한글이 다시 저장한 모양 — 합친 run 의 <hp:t> 뒤 수식, 표 run 뒤 바깥 run 수식도 맞춘다 (나머지 속성은 그대로)", async () => {
+    const { fitEquationsToRunSize } = await import("../src/hwpx/equation-generate.js")
+    const hdr = `<hh:charPr id="0" height="1000" textColor="#000000"/><hh:charPr id="5" height="900"/>`
+    const eq = (s: string) => `<hp:equation zOrder="0" id="7" textColor="#123456" baseLine="86" baseUnit="1200"><hp:sz width="1" widthRelTo="ABSOLUTE" height="1" heightRelTo="ABSOLUTE"/><hp:script>${s}</hp:script></hp:equation>`
+    const sec = `<hp:run charPrIDRef="0"><hp:t>값 </hp:t>${eq("a")}<hp:tbl><hp:run charPrIDRef="5">${eq("b")}</hp:run></hp:tbl>${eq("c")}</hp:run>`
+    const out = fitEquationsToRunSize(sec, hdr)
+    assert.deepEqual([...out.matchAll(/baseUnit="(\d+)"/g)].map((m) => m[1]), ["1000", "900", "1000"])
+    assert.equal(out.match(/textColor="#123456"/g)?.length, 3)
+    assert.ok(!/ (width|height)="1"/.test(out), "hp:sz 다시 잼")
+    assert.match(out, /widthRelTo="ABSOLUTE"/)
+  })
 })
 
 describe("수식 상자 높이 — 위첨자 (한글 실측)", () => {

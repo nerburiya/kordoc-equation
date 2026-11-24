@@ -3,7 +3,7 @@
 이 문서는 개인 수정본 [kordoc-equation](https://github.com/nerburiya/kordoc-equation)의 작업 기록입니다. 원본은 kordoc 4.25.5(커밋 `35573ec1`)입니다.
 목표는 LaTeX 수식이 든 Markdown을 HWPX·PDF로 바꿀 때 한컴 한글과 어긋나는 문제를 줄이는 것입니다.
 
-마지막 갱신: 2026-11-24 (커밋 `3b9d5803` 기준)
+마지막 갱신: 2026-11-24
 
 ## 1. 작업 현황
 
@@ -26,6 +26,7 @@
 | PDF 렌더 | 수식이 `E_n`, `(1+2+…)/6`, `ast` 같은 한 줄 글자로 나옴 | 수식을 한 줄 유니코드 글로 눌러 그림 | `equation-metrics.ts`(그릴 조각 출력), `src/render/equation-layout.ts` |
 | PDF 렌더 | 본문 한글이 "이 므 로"처럼 벌어짐 | HTML 안 SVG에서 Chromium이 조각 끝 빈칸을 지우고, `textLength`가 남은 폭을 글자 사이에 나눔 | `src/render/html.ts`(`white-space: pre`), `svg-content.ts`(`word-spacing`) |
 | PDF 렌더 | 쪽에 걸친 표의 마지막 행이 다음 쪽이 아니라 앞 쪽 아래 여백에 그려짐 | 아래 여백 넘침 여유를 쪽 중간의 작은 표에도 줌 | `src/render/table-pages.ts` |
+| HWPX 생성 | 한글이 다시 저장한 HWPX·예전 생성기 HWPX는 수식 상자를 고칠 길이 없음(다시 저장한 파일 463개 중 28개만 맞춰짐) | 한글은 run 을 합쳐 수식이 `<hp:t>` 뒤에 오는데, 정규식이 run 첫 자식인 수식만 찾음 | `equation-generate.ts`(run 을 쌓아 가며 찾고 크기 값만 바꿈), `fitHwpxEquations` 공개 |
 | HWPX 생성 | 수식 든 줄마다 0.5~1.6pt씩 위로 당겨져 쪽 나눔이 어긋남 | 위첨자 높이를 낮게 잡음. `LEFT … RIGHT ) ^{…}`의 첨자를 늘기 전 괄호에 닮 | `equation-metrics.ts` |
 
 ### 측정 결과 (예시 문서: 수학 문항 해설, 인라인 수식 463개, 본문 10pt)
@@ -53,16 +54,10 @@
    - 이 수정본은 단위 테스트만 통과했고, 회귀 게이트(`npm run bench:gate`, 특히 HWPX 렌더 배치·reflow)는 코퍼스(`bench/corpus/`)가 없어 돌리지 못했습니다.
    - 할 일: 코퍼스가 있는 환경에서 `npm run build && npm run bench:gate`를 돌려 원본과 비교합니다. "HWPX 렌더 배치" 글 위치 정확도가 원본(95.9%)보다 떨어지면 원인을 찾습니다.
 
-2. **한글이 다시 저장한 HWPX에는 상자 크기 재계산이 적용되지 않음**
-   - `fitEquationsToRunSize`(`equation-generate.ts`)는 kordoc이 만든 XML 모양(`<hp:equation id=… zOrder=…>`)만 정규식으로 찾습니다.
-   - 한글이 다시 저장한 파일은 속성 순서와 뒤따르는 요소가 달라서 한 개도 바뀌지 않습니다.
-   - 그래서 예전 생성기로 만든 HWPX는 md에서 다시 만들어야 새 상자 크기가 들어갑니다.
-   - 할 일: 정규식 대신 XML 파서로 `hp:equation`을 찾아 `hp:sz`·`baseLine`·`baseUnit`만 바꿉니다.
-
-3. **`kordoc generate`의 공문서 모드는 `$…$` 수식을 글자 그대로 둠**
-   - CLI 기본값(공문서 `official`)으로 만들면 수식이 `$E_n$` 글자로 남습니다.
-   - 라이브러리의 `markdownToHwpx(md, { inlineMath: true })`로만 수식이 변환됩니다.
-   - 할 일: 공문서 경로(`gen-gongmun.ts`)에도 인라인 수식을 연결하거나, 최소한 CLI에 옵션을 노출하고 경고합니다.
+2. **공문서 모드의 인라인 수식은 `--inline-math`를 켜야 함 (의도된 기본값)**
+   - `kordoc generate`는 기본으로 `$…$`를 글자 그대로 둡니다(가격 표기 `$`를 수식으로 잘못 읽지 않으려는 것).
+   - `--inline-math`(MCP `inline_math`)를 주면 공문서 모드에서도 한글 수식 개체로 바뀝니다(확인함).
+   - 할 일 없음. 수식 문서는 `--inline-math`를 씁니다.
 
 ### 중간
 
@@ -111,5 +106,6 @@ node --import tsx --test tests/hwpx-equation-generation.test.ts tests/render.tes
 npx tsx src/cli.ts render 문서.hwpx --format pdf -o 문서.pdf
 ```
 
-- Markdown → HWPX는 라이브러리의 `markdownToHwpx(md, { inlineMath: true })`를 씁니다.
+- Markdown → HWPX는 `kordoc generate 문서.md --inline-math` 또는 라이브러리의 `markdownToHwpx(md, { inlineMath: true })`를 씁니다.
+- 이미 있는 HWPX(예전 생성기 산출물, 한글이 다시 저장한 파일)는 `fitHwpxEquations(buf)`로 수식 상자만 다시 잴 수 있습니다.
 - 한글 PDF와 비교하려면 Windows에서 `bench/hangul-com-pdf.ps1 문서.hwpx 문서.hancom.pdf`로 한글 PDF를 만든 뒤, 두 PDF의 쪽별 글자 위치를 비교합니다.
