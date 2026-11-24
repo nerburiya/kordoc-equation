@@ -38,9 +38,10 @@
 | 상자 폭 오차 중앙값 / 상위 10% / 최대 | 11% / 24% / — | 1.4% / 4.7% / 7.7% |
 | 깨진 LaTeX 명령 | 6종 | 0 |
 | 한글 PDF와 쪽마다 줄 수가 같은 쪽 | — | 11쪽 중 11쪽 |
+| 한글 PDF와 줄 나눔까지 같은 쪽 | — | 11쪽 중 7쪽 (줄 4개가 다른 자리에서 나뉨) |
 | kordoc PDF 본문 한글 글자 x 위치 차이 (한글 PDF 기준) | 수식 뒤에서 글자당 약 2.5pt 벌어짐 | 중앙값 0.1~0.2pt |
 
-- **측정 방법:** Windows 11 + 한컴오피스 한글의 자동화(COM)로 HWPX를 열었습니다. 수식마다 다시 계산(`EquationModify`, `HEqEdit`)해 한글이 정한 상자 크기를 얻었습니다. PDF는 한글이 내보낸 것과 kordoc이 만든 것을 쪽마다 글자 위치로 비교했습니다.
+- **측정 방법:** Windows 11 + 한컴오피스 한글의 자동화(COM)로 HWPX를 열었습니다. 수식마다 다시 계산(`EquationModify`, `HEqEdit`)해 한글이 정한 상자 크기를 얻었습니다. PDF는 한글이 내보낸 것과 kordoc이 만든 것을 쪽마다 줄 위치로 비교했습니다. 쓴 도구는 아래 3절에 있습니다.
 - **테스트:** 전체 5,231개 중 실패 40건은 원본에서도 똑같이 실패합니다. 선택 의존성(이미지 변환·OCR·QR)을 빼고 설치했거나 Windows 심볼릭 링크를 다루는 테스트입니다.
 
 ## 2. 해결해야 할 문제
@@ -72,6 +73,7 @@
 
 6. **상자 폭 오차 (상위 10% 4.7%, 최대 7.7%)**
    - 높이보다 폭 오차가 큽니다. 줄 끝 위치와 줄 바꿈에 영향을 줄 수 있습니다.
+   - 실제로 예시 문서에서 4줄(3·6·8·11쪽)이 한글과 다른 자리에서 나뉩니다(`pdf-line-drift.mjs --lines`). 줄 수와 쪽 나눔은 같습니다.
    - 할 일: 폭 오차가 큰 수식을 모아 기호·함수 이름·괄호별 폭 표를 보강합니다.
 
 7. **PDF 수식 글자 추출**
@@ -94,18 +96,30 @@
 11. **"페이지에 걸친 표" 경고**
     - 렌더는 맞게 나뉘지만, 장면(scene) 영역 정보는 아직 시작 쪽 영역만 기록합니다(`svg-render.ts`). PDF 결과물에는 영향이 없습니다.
 
-12. **측정 도구가 저장소에 없음**
-    - 한글 자동화 측정 스크립트(수식 다시 계산·상자 비교·PDF 줄 위치 비교)는 작업 중 임시로 만들어 저장소에 넣지 않았습니다.
-    - 할 일: `bench/`에 정리해 넣어, 다른 사람도 같은 측정을 다시 할 수 있게 합니다. 저장소에 이미 있는 `bench/hangul-com-pdf.ps1`(한글 PDF 내보내기)과 함께 쓰면 됩니다.
-
 ## 3. 다시 확인하는 방법
 
 ```bash
 npm install
 node --import tsx --test tests/hwpx-equation-generation.test.ts tests/render.test.ts
-npx tsx src/cli.ts render 문서.hwpx --format pdf -o 문서.pdf
 ```
 
 - Markdown → HWPX는 `kordoc generate 문서.md --inline-math` 또는 라이브러리의 `markdownToHwpx(md, { inlineMath: true })`를 씁니다.
 - 이미 있는 HWPX(예전 생성기 산출물, 한글이 다시 저장한 파일)는 `fitHwpxEquations(buf)`로 수식 상자만 다시 잴 수 있습니다.
-- 한글 PDF와 비교하려면 Windows에서 `bench/hangul-com-pdf.ps1 문서.hwpx 문서.hancom.pdf`로 한글 PDF를 만든 뒤, 두 PDF의 쪽별 글자 위치를 비교합니다.
+
+### 한글과 비교 측정 (Windows + 한컴오피스 한글)
+
+```powershell
+# 1. 수식 상자: 한글이 수식마다 다시 조판한 사본 → kordoc 추정과 비교
+powershell -File bench/hangul-eq-refresh.ps1 -Src 문서.hwpx -Out 문서.hancom-eq.hwpx
+npx tsx bench/equation-box-cmp.mts 문서.hwpx 문서.hancom-eq.hwpx
+
+# 2. 줄 위치: 한글 PDF ↔ kordoc PDF 쪽별 줄 수·줄 나눔·y 차
+powershell -File bench/hangul-com-pdf.ps1 -Src 문서.hwpx -Out 문서.hancom.pdf
+npx tsx src/cli.ts render 문서.hwpx --format pdf -o 문서.kordoc.pdf
+node bench/pdf-line-drift.mjs 문서.hancom.pdf 문서.kordoc.pdf --lines
+```
+
+- `hangul-eq-refresh.ps1`: 한글은 파일을 열 때 수식 상자를 다시 재지 않으므로, 수식마다 `EquationModify`를 한 번씩 실행한 뒤 저장합니다. 이 사본의 `hp:sz`·`baseLine`이 정답입니다.
+- `equation-box-cmp.mts`: 원본 스크립트를 한글이 정한 글자 크기로 `equationBox`에 넣어 폭·높이·기준선 오차(중앙값·상위 10%·최대)와 오차가 큰 수식을 찍습니다. 두 파일의 수식 수가 같아야 합니다.
+- `pdf-line-drift.mjs`: 한글 글자가 든 조각만 줄로 묶어(수식 첨자는 빼고) 쪽 안에서 순서대로 짝짓습니다. 글자 x 위치(자간)는 재지 않습니다.
+- 예시 문서 기준값(2026-11-24): 폭 1.4% / 4.7% / 7.7%, 높이 0.0% / 0.3% / 4.9%, 줄 수 같은 쪽 11/11, 줄 나눔까지 같은 쪽 7/11, y 차 중앙값 0.45pt · 최대 5.2pt.
